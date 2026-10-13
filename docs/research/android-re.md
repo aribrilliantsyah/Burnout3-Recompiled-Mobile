@@ -48,6 +48,15 @@ With its synthetic `tools/conformance/test.xbe` the same test segfaults, also
 on the unmodified base commit: a known gap in the synthetic image (no thunk
 table), not a regression.
 
+## Linux baseline (Task 5)
+
+`build/linux-vk/b3_recomp` (GCC, -O1 lifted code, 26 MB) on the dev laptop
+(Ryzen 3 3250U, Radeon Vega 3, RADV), 90 s headless with
+`RECOMP_VK_HEADLESS=1 RECOMP_FPS_LOG=1`: intro movies and the title logo
+render correctly, 52-56 fps, vblank 60 Hz, no fatal. With
+`NFSU2_GAME_DIR=/nonexistent`: `[FATAL] Failed to load default.xbe...`,
+exit 1 at once.
+
 ## REA (Reverse Engineer Anything) 6.4.0
 
 - `open_binary` on `default.xbe`: `unsupported binary format`. REA's only
