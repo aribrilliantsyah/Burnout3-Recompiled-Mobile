@@ -1830,6 +1830,33 @@ static void *mach_map_fixed(void *address, size_t size, int prot)
 }
 #endif
 
+/* A slice of a reservation this process holds (the Xbox memory layout's
+ * 4 GB guest span), armed by its owner right before it maps there: the next
+ * fixed VirtualAlloc / MapViewOfFileEx that lies inside it replaces the
+ * reservation in place with MAP_FIXED -- one atomic mmap -- and disarms it.
+ * Releasing the slice first and then mapping it opened a window in which
+ * another thread's mmap could land in the hole (top-down allocators prefer
+ * it: it is the highest free gap) and the fixed mapping then failed; on
+ * Android the tiled aperture at guest 0xF0000000 did, one launch in four.
+ * One-shot and exact, so no other fixed request can ever displace a live
+ * mapping this way. */
+static uintptr_t s_repl_lo, s_repl_hi;
+
+void w32_arm_replace(void *lo, size_t len)
+{
+    s_repl_lo = (uintptr_t)lo;
+    s_repl_hi = lo ? (uintptr_t)lo + len : 0;
+}
+
+static int take_replace(const void *addr, size_t len)
+{
+    uintptr_t a = (uintptr_t)addr;
+    if (!s_repl_hi || a < s_repl_lo || a + len > s_repl_hi || a + len < a)
+        return 0;
+    s_repl_lo = s_repl_hi = 0;
+    return 1;
+}
+
 LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD protect)
 {
     int prot  = prot_from_page(protect);
@@ -1846,10 +1873,17 @@ LPVOID VirtualAlloc(LPVOID address, SIZE_T size, DWORD allocationType, DWORD pro
 #if defined(MAP_FIXED_NOREPLACE)
     if (address) flags |= MAP_FIXED_NOREPLACE;
 #endif
+    int owned = address && take_replace(address, size);
+    if (owned) {
+#if defined(MAP_FIXED_NOREPLACE)
+        flags &= ~MAP_FIXED_NOREPLACE;
+#endif
+        flags |= MAP_FIXED;
+    }
 
     void *p;
 #if defined(__APPLE__)
-    if (address) {
+    if (address && !owned) {
         p = mach_map_fixed(address, size, prot ? prot : PROT_READ | PROT_WRITE);
     } else
 #endif
@@ -2491,7 +2525,9 @@ LPVOID MapViewOfFileEx(HANDLE mapping, DWORD access, DWORD offHigh, DWORD offLow
      * addresses, so with a base the OS chose rather than one we picked, that
      * difference is the process quietly destroying its own libraries and heap
      * and dying somewhere unrelated a moment later. */
-    if (baseAddr) {
+    if (baseAddr && take_replace(baseAddr, len)) {
+        flags |= MAP_FIXED;                 /* replaces our own reservation */
+    } else if (baseAddr) {
 #if defined(MAP_FIXED_NOREPLACE)
         flags |= MAP_FIXED_NOREPLACE;
 #elif defined(__APPLE__)

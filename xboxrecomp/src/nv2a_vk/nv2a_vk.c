@@ -120,14 +120,24 @@ static PFN_vkCmdSetDepthCompareOp     p_depth_op;
 static PFN_vkCmdSetStencilTestEnable  p_stencil_test;
 static PFN_vkCmdSetStencilOp          p_stencil_op;
 
+/* The Vulkan 1.1 path: render passes instead of dynamic rendering,
+ * descriptor sets from a per-frame pool instead of push descriptors, and
+ * the vertex layout plus the cull, depth, stencil and topology state baked
+ * into each pipeline instead of VK_EXT_vertex_input_dynamic_state and
+ * extended dynamic state. Chosen when the driver lacks any of those (the
+ * Mali-G68 r32p1 driver on Android 13 is Vulkan 1.1.177 with none of them),
+ * or forced with RECOMP_VK_LEGACY=1 to test it on a desktop driver. */
+static int s_legacy;
+
 /* Presentation. */
 static VkSurfaceKHR   s_surface;
 static VkSwapchainKHR s_swapchain;
 static VkFormat       s_sc_format;
 static VkExtent2D     s_sc_extent;
 static uint32_t       s_sc_count;
-static VkImage        s_sc_images[8];
-static VkImageView    s_sc_views[8];
+#define VK_MAX_SC 16
+static VkImage        s_sc_images[VK_MAX_SC];
+static VkImageView    s_sc_views[VK_MAX_SC];
 static int            s_headless;
 #if !defined(__SWITCH__)
 static SDL_Window    *s_win;
@@ -164,7 +174,10 @@ static VkDeviceMemory alloc_mem(VkMemoryRequirements rq, VkMemoryPropertyFlags w
 
 typedef struct {
     VkImage image; VkImageView view; VkDeviceMemory mem; VkPipeline pipe;
+    VkFramebuffer fb;
 } Garbage;
+
+#define VK_MAX_DPOOL 32
 
 typedef struct {
     VkCommandPool   pool;
@@ -178,6 +191,8 @@ typedef struct {
     int             submitted;
     Garbage        *garbage;
     uint32_t        ngarbage, garbage_cap;
+    VkDescriptorPool dpool[VK_MAX_DPOOL];   /* Vulkan 1.1 path: this frame's sets */
+    uint32_t        ndpool, dcur;
 } Frame;
 
 static Frame  s_fr[VK_FRAMES];
@@ -189,6 +204,7 @@ static int s_dyn_valid;
 static int s_pipe_foreign;      /* a pipeline not from pipe_get is bound */
 
 static void garbage_add_pipe(VkPipeline pipe);
+static void fb_forget_view(VkImageView view);
 static void garbage_add(VkImage img, VkImageView view, VkDeviceMemory mem)
 {
     Frame *f = s_f;
@@ -200,7 +216,14 @@ static void garbage_add(VkImage img, VkImageView view, VkDeviceMemory mem)
     f->garbage[f->ngarbage].view = view;
     f->garbage[f->ngarbage].mem = mem;
     f->garbage[f->ngarbage].pipe = VK_NULL_HANDLE;
+    f->garbage[f->ngarbage].fb = VK_NULL_HANDLE;
     f->ngarbage++;
+}
+
+static void garbage_add_fb(VkFramebuffer fb)
+{
+    garbage_add(VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    s_f->garbage[s_f->ngarbage - 1].fb = fb;
 }
 
 static void garbage_add_pipe(VkPipeline pipe)
@@ -212,13 +235,26 @@ static void garbage_add_pipe(VkPipeline pipe)
 static void garbage_free(Frame *f)
 {
     uint32_t i;
+    for (i = 0; i < f->ngarbage; i++)
+        if (f->garbage[i].fb) vkDestroyFramebuffer(s_dev, f->garbage[i].fb, NULL);
     for (i = 0; i < f->ngarbage; i++) {
-        if (f->garbage[i].view) vkDestroyImageView(s_dev, f->garbage[i].view, NULL);
+        if (f->garbage[i].view) {
+            fb_forget_view(f->garbage[i].view);
+            vkDestroyImageView(s_dev, f->garbage[i].view, NULL);
+        }
         if (f->garbage[i].image) vkDestroyImage(s_dev, f->garbage[i].image, NULL);
         if (f->garbage[i].mem) vkFreeMemory(s_dev, f->garbage[i].mem, NULL);
         if (f->garbage[i].pipe) vkDestroyPipeline(s_dev, f->garbage[i].pipe, NULL);
     }
     f->ngarbage = 0;
+}
+
+static void dpool_reset(Frame *f)
+{
+    uint32_t i;
+    for (i = 0; i < f->ndpool; i++)
+        vkResetDescriptorPool(s_dev, f->dpool[i], 0);
+    f->dcur = 0;
 }
 
 static void frame_begin(void)
@@ -232,6 +268,7 @@ static void frame_begin(void)
     }
     garbage_free(s_f);
     s_f->ring_off = 0;
+    dpool_reset(s_f);
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(s_f->cb, &bi);
@@ -261,6 +298,185 @@ static VkDeviceSize ring_alloc(VkDeviceSize size, VkDeviceSize align, void **ptr
     s_f->ring_off = at + size;
     *ptr = s_f->ring_ptr + at;
     return at;
+}
+
+/* ── Vulkan 1.1 path: render passes, framebuffers, descriptor sets ── */
+
+/* Render passes by attachment formats. Pipelines only need a compatible
+ * pass (same formats and sample counts), so draws, clears and their
+ * pipelines all use the LOAD/STORE one in GENERAL layout -- what the
+ * dynamic-rendering path does with VkRenderingAttachmentInfo. `present` is
+ * the FXAA pass into a swapchain or dump image: CLEAR, colour-attachment
+ * layout on both sides (the caller's barriers move it). */
+typedef struct { VkFormat cfmt, dfmt; int present; VkRenderPass rp; } RpEnt;
+static RpEnt s_rps[8];
+
+static VkRenderPass rp_get(VkFormat cfmt, VkFormat dfmt, int present)
+{
+    VkAttachmentDescription at[2];
+    VkAttachmentReference cr = { 0, VK_IMAGE_LAYOUT_GENERAL };
+    VkAttachmentReference dr = { 1, VK_IMAGE_LAYOUT_GENERAL };
+    VkSubpassDescription sp;
+    VkRenderPassCreateInfo ci = { VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO };
+    VkImageLayout lay = present ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
+    int i;
+
+    for (i = 0; i < 8 && s_rps[i].rp; i++)
+        if (s_rps[i].cfmt == cfmt && s_rps[i].dfmt == dfmt && s_rps[i].present == present)
+            return s_rps[i].rp;
+    if (i == 8)
+        return VK_NULL_HANDLE;
+    memset(at, 0, sizeof at);
+    memset(&sp, 0, sizeof sp);
+    at[0].format = cfmt;
+    at[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[0].loadOp = present ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[0].initialLayout = at[0].finalLayout = lay;
+    cr.layout = lay;
+    at[1].format = dfmt;
+    at[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[1].loadOp = at[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    at[1].storeOp = at[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+    at[1].initialLayout = at[1].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    sp.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sp.colorAttachmentCount = 1;
+    sp.pColorAttachments = &cr;
+    if (dfmt != VK_FORMAT_UNDEFINED)
+        sp.pDepthStencilAttachment = &dr;
+    ci.attachmentCount = dfmt != VK_FORMAT_UNDEFINED ? 2 : 1;
+    ci.pAttachments = at;
+    ci.subpassCount = 1;
+    ci.pSubpasses = &sp;
+    if (vkCreateRenderPass(s_dev, &ci, NULL, &s_rps[i].rp) != VK_SUCCESS) {
+        LOGE("vkCreateRenderPass failed\n");
+        s_rps[i].rp = VK_NULL_HANDLE;
+        return VK_NULL_HANDLE;
+    }
+    s_rps[i].cfmt = cfmt;
+    s_rps[i].dfmt = dfmt;
+    s_rps[i].present = present;
+    return s_rps[i].rp;
+}
+
+/* Framebuffers by (pass, views, size). A surface's views live until it is
+ * replaced, so the cache is small; a view about to be destroyed takes its
+ * framebuffers with it (fb_forget_view), and an evicted one may still be
+ * in flight, so it goes through the frame's garbage. */
+#define VK_MAX_FB 96
+typedef struct { VkRenderPass rp; VkImageView c, d; uint32_t w, h, used; VkFramebuffer fb; } FbEnt;
+static FbEnt s_fbs[VK_MAX_FB];
+static uint32_t s_fb_tick;
+
+static void fb_forget_view(VkImageView view)
+{
+    int i;
+    for (i = 0; i < VK_MAX_FB; i++)
+        if (s_fbs[i].fb && (s_fbs[i].c == view || s_fbs[i].d == view)) {
+            vkDestroyFramebuffer(s_dev, s_fbs[i].fb, NULL);
+            memset(&s_fbs[i], 0, sizeof s_fbs[i]);
+        }
+}
+
+static VkFramebuffer fb_get(VkRenderPass rp, VkImageView c, VkImageView d, uint32_t w, uint32_t h)
+{
+    VkFramebufferCreateInfo ci = { VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO };
+    VkImageView v[2] = { c, d };
+    int i, slot = -1;
+    uint32_t oldest = UINT32_MAX;
+
+    s_fb_tick++;
+    for (i = 0; i < VK_MAX_FB; i++) {
+        FbEnt *e = &s_fbs[i];
+        if (e->fb && e->rp == rp && e->c == c && e->d == d && e->w == w && e->h == h) {
+            e->used = s_fb_tick;
+            return e->fb;
+        }
+        if (!e->fb) {
+            if (oldest) { slot = i; oldest = 0; }
+        } else if (e->used < oldest) {
+            slot = i;
+            oldest = e->used;
+        }
+    }
+    if (s_fbs[slot].fb)
+        garbage_add_fb(s_fbs[slot].fb);
+    ci.renderPass = rp;
+    ci.attachmentCount = d ? 2 : 1;
+    ci.pAttachments = v;
+    ci.width = w;
+    ci.height = h;
+    ci.layers = 1;
+    memset(&s_fbs[slot], 0, sizeof s_fbs[slot]);
+    if (vkCreateFramebuffer(s_dev, &ci, NULL, &s_fbs[slot].fb) != VK_SUCCESS) {
+        LOGE("vkCreateFramebuffer %ux%u failed\n", w, h);
+        s_fbs[slot].fb = VK_NULL_HANDLE;
+        return VK_NULL_HANDLE;
+    }
+    s_fbs[slot].rp = rp;
+    s_fbs[slot].c = c;
+    s_fbs[slot].d = d;
+    s_fbs[slot].w = w;
+    s_fbs[slot].h = h;
+    s_fbs[slot].used = s_fb_tick;
+    return s_fbs[slot].fb;
+}
+
+/* A descriptor set for this frame, from its pools (reset at frame start). */
+static VkDescriptorSet dset_alloc(VkDescriptorSetLayout dsl)
+{
+    Frame *f = s_f;
+    VkDescriptorSetAllocateInfo ai = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO };
+    VkDescriptorSet set = VK_NULL_HANDLE;
+
+    ai.descriptorSetCount = 1;
+    ai.pSetLayouts = &dsl;
+    for (;;) {
+        if (f->dcur == f->ndpool) {
+            VkDescriptorPoolSize ps[2] = {
+                { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 * 1024 },
+                { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4 * 1024 },
+            };
+            VkDescriptorPoolCreateInfo pci = { VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
+            if (f->ndpool == VK_MAX_DPOOL) {
+                static int warned;
+                if (!warned++)
+                    LOGE("descriptor pools exhausted this frame\n");
+                return VK_NULL_HANDLE;
+            }
+            pci.maxSets = 1024;
+            pci.poolSizeCount = 2;
+            pci.pPoolSizes = ps;
+            if (vkCreateDescriptorPool(s_dev, &pci, NULL, &f->dpool[f->ndpool]) != VK_SUCCESS)
+                return VK_NULL_HANDLE;
+            f->ndpool++;
+        }
+        ai.descriptorPool = f->dpool[f->dcur];
+        if (vkAllocateDescriptorSets(s_dev, &ai, &set) == VK_SUCCESS)
+            return set;
+        f->dcur++;                                /* full: the next pool */
+    }
+}
+
+/* vkCmdPushDescriptorSetKHR, or a fresh set written and bound. */
+static void bind_desc(VkPipelineLayout layout, VkDescriptorSetLayout dsl, uint32_t n,
+                      VkWriteDescriptorSet *wr)
+{
+    VkDescriptorSet set;
+    uint32_t i;
+    if (!s_legacy) {
+        p_push_desc(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, n, wr);
+        return;
+    }
+    set = dset_alloc(dsl);
+    if (!set)
+        return;
+    for (i = 0; i < n; i++)
+        wr[i].dstSet = set;
+    vkUpdateDescriptorSets(s_dev, n, wr, 0, NULL);
+    vkCmdBindDescriptorSets(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &set, 0, NULL);
 }
 
 /* ── Rendering passes and barriers ────────────────────────────────── */
@@ -355,7 +571,10 @@ static void barrier_all(void)
 static void end_rendering(void)
 {
     if (s_in_render) {
-        p_end_rendering(s_cb);
+        if (s_legacy)
+            vkCmdEndRenderPass(s_cb);
+        else
+            p_end_rendering(s_cb);
         s_in_render = 0;
     }
 }
@@ -427,6 +646,19 @@ static void begin_rendering(VkSurf *s, VkDepthBuf *d)
         ri.pDepthAttachment = &da;
         ri.pStencilAttachment = &da;
     }
+    if (s_legacy) {
+        VkRenderPassBeginInfo bi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        bi.renderPass = rp_get(VK_FORMAT_B8G8R8A8_UNORM, d ? s_depth_fmt : VK_FORMAT_UNDEFINED, 0);
+        /* The framebuffer is the smaller of the two, like renderArea. */
+        bi.framebuffer = bi.renderPass
+            ? fb_get(bi.renderPass, s->view, d ? d->view : VK_NULL_HANDLE,
+                     ri.renderArea.extent.width, ri.renderArea.extent.height)
+            : VK_NULL_HANDLE;
+        if (!bi.framebuffer)
+            return;                       /* s_in_render stays 0: the draw is skipped */
+        bi.renderArea = ri.renderArea;
+        vkCmdBeginRenderPass(s_cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    } else
     p_begin_rendering(s_cb, &ri);
     s_in_render = 1;
     s_rt = s;
@@ -1825,6 +2057,8 @@ static PipeEnt s_pipes[VK_MAX_PIPE];
 static int s_pipe_head[PIPE_BUCKETS];
 static int s_npipes;
 
+static void lpipes_forget_prog(int prog);
+
 static void pipes_forget_prog(int prog)
 {
     int i;
@@ -1841,6 +2075,7 @@ static void pipes_forget_prog(int prog)
             e->pipe = VK_NULL_HANDLE;
         }
     }
+    lpipes_forget_prog(prog);
 }
 
 static VkBlendFactor blend_factor(uint32_t v)
@@ -1937,6 +2172,8 @@ static VkPipeline pipe_get(const PipeKey *k)
     VkPipeline pipe = VK_NULL_HANDLE;
     VkProg *p = &s_prog[k->prog];
 
+    if (s_legacy)
+        return VK_NULL_HANDLE;              /* lpipe_get, once the vertex layout is known */
     for (i = 0; i < sizeof *k / 4; i++)
         h = (h ^ w[i]) * 16777619u;
     h &= PIPE_BUCKETS - 1;
@@ -2007,6 +2244,171 @@ static VkPipeline pipe_get(const PipeKey *k)
     s_pipe_head[h] = ++s_npipes;
     s_pipes_unsaved++;
     pipe_rec_append(k);
+    return pipe;
+}
+
+/* Vulkan 1.1 path: what the dynamic path sets per draw is part of the
+ * pipeline here -- the vertex layout (format and stride of each of the 16
+ * attributes), cull mode, front face, topology, and the depth and stencil
+ * tests and ops. Viewport, scissor, blend constants and the stencil masks
+ * and reference stay dynamic (core Vulkan 1.0). */
+typedef struct {
+    PipeKey  base;
+    uint32_t cull, front, topo, dtest, dwrite, dop, stest, sfail, szfail, spass, sop;
+    uint32_t vfmt[NV2A_RAW_ATTRS], vstride[NV2A_RAW_ATTRS];
+} LPipeKey;
+
+typedef struct { LPipeKey key; VkPipeline pipe; uint32_t hash; int next; } LPipeEnt;
+
+#define VK_MAX_LPIPE 8192
+#define LPIPE_BUCKETS 4096
+static LPipeEnt *s_lpipes;
+static int s_lpipe_head[LPIPE_BUCKETS];
+static int s_nlpipes;
+static uint32_t s_lvi_fmt[NV2A_RAW_ATTRS], s_lvi_stride[NV2A_RAW_ATTRS];  /* upload_vertices */
+
+static void lpipes_forget_prog(int prog)
+{
+    int i;
+    for (i = 0; i < s_nlpipes; i++) {
+        LPipeEnt *e = &s_lpipes[i];
+        if (e->pipe && e->key.base.prog == prog) {
+            int *at = &s_lpipe_head[e->hash], me = i + 1;
+            while (*at) {
+                if (*at == me) { *at = e->next; break; }
+                at = &s_lpipes[*at - 1].next;
+            }
+            garbage_add_pipe(e->pipe);
+            e->pipe = VK_NULL_HANDLE;
+        }
+    }
+}
+
+static VkPipeline lpipe_get(const LPipeKey *k)
+{
+    const uint32_t *w = (const uint32_t *)k;
+    uint32_t h = 2166136261u, i;
+    int e;
+    LPipeEnt *pe;
+    VkGraphicsPipelineCreateInfo ci = { VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO };
+    VkPipelineShaderStageCreateInfo st[2];
+    VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
+    VkVertexInputBindingDescription vb[NV2A_RAW_ATTRS];
+    VkVertexInputAttributeDescription va[NV2A_RAW_ATTRS];
+    VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO };
+    VkPipelineViewportStateCreateInfo vp = { VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO };
+    VkPipelineRasterizationStateCreateInfo rs = { VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO };
+    VkPipelineMultisampleStateCreateInfo ms = { VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO };
+    VkPipelineDepthStencilStateCreateInfo ds = { VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO };
+    VkPipelineColorBlendAttachmentState ba;
+    VkPipelineColorBlendStateCreateInfo cb = { VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO };
+    VkPipelineDynamicStateCreateInfo dy = { VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO };
+    static const VkDynamicState dyn[] = {
+        VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR, VK_DYNAMIC_STATE_BLEND_CONSTANTS,
+        VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK, VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
+        VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+    };
+    VkPipeline pipe = VK_NULL_HANDLE;
+    VkProg *p = &s_prog[k->base.prog];
+
+    if (!s_lpipes) {
+        s_lpipes = (LPipeEnt *)calloc(VK_MAX_LPIPE, sizeof *s_lpipes);
+        if (!s_lpipes)
+            return VK_NULL_HANDLE;
+    }
+    for (i = 0; i < sizeof *k / 4; i++)
+        h = (h ^ w[i]) * 16777619u;
+    h &= LPIPE_BUCKETS - 1;
+    for (e = s_lpipe_head[h]; e; e = s_lpipes[e - 1].next)
+        if (s_lpipes[e - 1].pipe && !memcmp(&s_lpipes[e - 1].key, k, sizeof *k))
+            return s_lpipes[e - 1].pipe;
+
+    memset(st, 0, sizeof st);
+    st[0].sType = st[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    st[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    st[0].module = p->vs;
+    st[0].pName = "main";
+    st[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    st[1].module = p->fs;
+    st[1].pName = "main";
+    for (i = 0; i < NV2A_RAW_ATTRS; i++) {
+        vb[i].binding = i;
+        vb[i].stride = k->vstride[i];
+        vb[i].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        va[i].location = i;
+        va[i].binding = i;
+        va[i].format = (VkFormat)k->vfmt[i];
+        va[i].offset = 0;
+    }
+    vi.vertexBindingDescriptionCount = NV2A_RAW_ATTRS;
+    vi.pVertexBindingDescriptions = vb;
+    vi.vertexAttributeDescriptionCount = NV2A_RAW_ATTRS;
+    vi.pVertexAttributeDescriptions = va;
+    ia.topology = (VkPrimitiveTopology)k->topo;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.lineWidth = 1.0f;
+    rs.depthClampEnable = s_have_depth_clamp ? VK_TRUE : VK_FALSE;
+    rs.cullMode = k->cull;
+    rs.frontFace = (VkFrontFace)k->front;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ds.depthTestEnable = k->dtest ? VK_TRUE : VK_FALSE;
+    ds.depthWriteEnable = k->dwrite ? VK_TRUE : VK_FALSE;
+    ds.depthCompareOp = (VkCompareOp)k->dop;
+    ds.stencilTestEnable = k->stest ? VK_TRUE : VK_FALSE;
+    ds.front.failOp = (VkStencilOp)k->sfail;
+    ds.front.passOp = (VkStencilOp)k->spass;
+    ds.front.depthFailOp = (VkStencilOp)k->szfail;
+    ds.front.compareOp = (VkCompareOp)k->sop;
+    ds.back = ds.front;
+    memset(&ba, 0, sizeof ba);
+    ba.blendEnable = k->base.blend ? VK_TRUE : VK_FALSE;
+    ba.srcColorBlendFactor = ba.srcAlphaBlendFactor = blend_factor(k->base.bsrc);
+    ba.dstColorBlendFactor = ba.dstAlphaBlendFactor = blend_factor(k->base.bdst);
+    ba.colorBlendOp = ba.alphaBlendOp = blend_op(k->base.beq);
+    ba.colorWriteMask = k->base.cmask;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &ba;
+    dy.dynamicStateCount = (uint32_t)(sizeof dyn / sizeof dyn[0]);
+    dy.pDynamicStates = dyn;
+    ci.stageCount = 2;
+    ci.pStages = st;
+    ci.pVertexInputState = &vi;
+    ci.pInputAssemblyState = &ia;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pDepthStencilState = &ds;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &dy;
+    ci.layout = s_layout;
+    ci.renderPass = rp_get(VK_FORMAT_B8G8R8A8_UNORM,
+                           k->base.depth ? s_depth_fmt : VK_FORMAT_UNDEFINED, 0);
+    if (!ci.renderPass)
+        return VK_NULL_HANDLE;
+    VT("vkCreateGraphicsPipelines (1.1) prog %d topo %u cull %u depth %u/%u stencil %u\n",
+       k->base.prog, k->topo, k->cull, k->dtest, k->dwrite, k->stest);
+    if (vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe) != VK_SUCCESS) {
+        static int warned;
+        if (warned++ < 8)
+            LOGE("pipeline creation failed (Vulkan 1.1 path, prog %d)\n", k->base.prog);
+        return VK_NULL_HANDLE;
+    }
+    if (s_nlpipes == VK_MAX_LPIPE) {
+        static int warned;
+        if (!warned++)
+            LOGE("pipeline table full (Vulkan 1.1 path)\n");
+        garbage_add_pipe(pipe);                 /* used for this draw only */
+        return pipe;
+    }
+    pe = &s_lpipes[s_nlpipes];
+    pe->key = *k;
+    pe->pipe = pipe;
+    pe->hash = h;
+    pe->next = s_lpipe_head[h];
+    s_lpipe_head[h] = ++s_nlpipes;
+    s_pipes_unsaved++;                          /* vkpipecache.bin gets it */
     return pipe;
 }
 
@@ -2161,13 +2563,22 @@ static int create_swapchain(void)
             vkDestroySwapchainKHR(s_dev, s_swapchain, NULL);
         s_swapchain = sc;
     }
-    for (i = 0; i < 8; i++)
+    for (i = 0; i < VK_MAX_SC; i++)
         if (s_sc_views[i]) {
+            fb_forget_view(s_sc_views[i]);
             vkDestroyImageView(s_dev, s_sc_views[i], NULL);
             s_sc_views[i] = VK_NULL_HANDLE;
         }
-    s_sc_count = 8;
-    vkGetSwapchainImagesKHR(s_dev, s_swapchain, &s_sc_count, s_sc_images);
+    /* All of them: an image index past the array read a garbage handle,
+     * and the Mali driver (asked for 3, it made 9) faulted in the barrier
+     * on it at the ninth flip. */
+    vkGetSwapchainImagesKHR(s_dev, s_swapchain, &s_sc_count, NULL);
+    if (s_sc_count > VK_MAX_SC) {
+        LOGE("swapchain has %u images, only %u handled\n", s_sc_count, VK_MAX_SC);
+        s_sc_count = VK_MAX_SC;
+    }
+    if (vkGetSwapchainImagesKHR(s_dev, s_swapchain, &s_sc_count, s_sc_images) < 0)
+        return 0;
     for (i = 0; i < s_sc_count; i++) {
         VkImageViewCreateInfo vi = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
         vi.image = s_sc_images[i];
@@ -2364,6 +2775,34 @@ static int ready(void)
     }
 #endif
 
+    {
+        /* Everything the modern path needs, or the Vulkan 1.1 path. */
+        VkExtensionProperties *ep = NULL;
+        uint32_t ne = 0, k;
+        int have_push = 0, have_vi = 0, have_eds = 0;
+        const char *e = getenv("RECOMP_VK_LEGACY");
+        vkEnumerateDeviceExtensionProperties(s_pd, NULL, &ne, NULL);
+        ep = (VkExtensionProperties *)calloc(ne ? ne : 1, sizeof *ep);
+        if (ep && vkEnumerateDeviceExtensionProperties(s_pd, NULL, &ne, ep) == VK_SUCCESS)
+            for (k = 0; k < ne; k++) {
+                if (!strcmp(ep[k].extensionName, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) have_push = 1;
+                if (!strcmp(ep[k].extensionName, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME)) have_vi = 1;
+                if (!strcmp(ep[k].extensionName, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME)) have_eds = 1;
+            }
+        free(ep);
+        s_legacy = VK_API_VERSION_MINOR(pp.apiVersion) < 3 && VK_API_VERSION_MAJOR(pp.apiVersion) == 1;
+        if (!have_push || !have_vi)
+            s_legacy = 1;
+        (void)have_eds;                 /* core in 1.3, which the modern path needs anyway */
+        if (e && *e == '1')
+            s_legacy = 1;
+        else if (e && *e == '0')
+            s_legacy = 0;
+        if (s_legacy)
+            fprintf(stderr, "  [VK] Vulkan 1.1 path: render passes, descriptor sets, static state "
+                            "(push descriptors %s, dynamic vertex input %s)\n",
+                    have_push ? "yes" : "no", have_vi ? "yes" : "no");
+    }
     qci.queueFamilyIndex = s_qfam;
     qci.queueCount = 1;
     qci.pQueuePriorities = &prio;
@@ -2377,8 +2816,12 @@ static int ready(void)
     f2.features.samplerAnisotropy = s_aniso > 1.0f ? VK_TRUE : VK_FALSE;
     if (!s_headless)
         dext[ndext++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
-    dext[ndext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
-    dext[ndext++] = VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME;
+    if (s_legacy) {
+        f2.pNext = NULL;                    /* no 1.3 / EXT feature structs on 1.1 */
+    } else {
+        dext[ndext++] = VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME;
+        dext[ndext++] = VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME;
+    }
     dci.pNext = &f2;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
@@ -2386,11 +2829,13 @@ static int ready(void)
     dci.ppEnabledExtensionNames = dext;
     (void)feds;
     if (vkCreateDevice(s_pd, &dci, NULL, &s_dev) != VK_SUCCESS) {
-        LOGE("vkCreateDevice failed (needs push descriptors, dynamic vertex input, Vulkan 1.3)\n");
+        LOGE("vkCreateDevice failed (%s)\n", s_legacy ? "Vulkan 1.1 path"
+             : "needs push descriptors, dynamic vertex input, Vulkan 1.3");
         return 0;
     }
     vkGetDeviceQueue(s_dev, s_qfam, 0, &s_queue);
 #define GET(p, name) p = (void *)vkGetDeviceProcAddr(s_dev, name); if (!p) { LOGE("missing %s\n", name); return 0; }
+    if (!s_legacy) {
     GET(p_push_desc, "vkCmdPushDescriptorSetKHR");
     GET(p_vertex_input, "vkCmdSetVertexInputEXT");
     GET(p_begin_rendering, "vkCmdBeginRendering");
@@ -2403,6 +2848,7 @@ static int ready(void)
     GET(p_depth_op, "vkCmdSetDepthCompareOp");
     GET(p_stencil_test, "vkCmdSetStencilTestEnable");
     GET(p_stencil_op, "vkCmdSetStencilOp");
+    }
 #undef GET
 
     if (!s_headless && !create_swapchain()) {
@@ -2424,7 +2870,7 @@ static int ready(void)
             b[i].stageFlags = i == 0 || i == 6 ? VK_SHADER_STAGE_VERTEX_BIT
                                                : VK_SHADER_STAGE_FRAGMENT_BIT;
         }
-        lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        lci.flags = s_legacy ? 0 : VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
         lci.bindingCount = 7;
         lci.pBindings = b;
         if (vkCreateDescriptorSetLayout(s_dev, &lci, NULL, &s_dsl) != VK_SUCCESS)
@@ -2521,6 +2967,7 @@ static void flush_frame_wait(void)
     vkResetFences(s_dev, 1, &s_f->fence);
     garbage_free(s_f);
     s_f->ring_off = 0;
+    dpool_reset(s_f);
     vkResetCommandPool(s_dev, s_f->pool, 0);
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(s_cb, &bi);
@@ -2586,6 +3033,24 @@ static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology 
     d.bcolor = r[0x34C / 4];
     if (s_dyn_valid && !memcmp(&d, &s_dyn, sizeof d))
         return;
+    if (s_legacy) {
+        /* Vulkan 1.1: cull, face, topology, depth and stencil ops are in the
+         * pipeline (legacy_key); the masks, reference and blend constant
+         * are core dynamic state. */
+        if (!s_dyn_valid || memcmp(&d.sfail, &s_dyn.sfail, 7 * sizeof(uint32_t))) {
+            vkCmdSetStencilCompareMask(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, d.smask);
+            vkCmdSetStencilWriteMask(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, d.swrite);
+            vkCmdSetStencilReference(s_cb, VK_STENCIL_FACE_FRONT_AND_BACK, d.sref);
+        }
+        if (!s_dyn_valid || d.bcolor != s_dyn.bcolor) {
+            float bc[4];
+            argb_vec4(d.bcolor, bc);
+            vkCmdSetBlendConstants(s_cb, bc);
+        }
+        s_dyn = d;
+        s_dyn_valid = 1;
+        return;
+    }
     if (!s_dyn_valid || d.cull != s_dyn.cull || d.cullmode != s_dyn.cullmode) {
         VkCullModeFlags cm = VK_CULL_MODE_NONE;
         if (d.cull)
@@ -2620,6 +3085,33 @@ static void apply_dynamic(const uint32_t *r, int has_depth, VkPrimitiveTopology 
     }
     s_dyn = d;
     s_dyn_valid = 1;
+}
+
+/* The Vulkan 1.1 pipeline for a draw: its PipeKey plus what apply_dynamic
+ * left in s_dyn and upload_vertices in s_lvi_*. */
+static void legacy_key(const PipeKey *base, VkPrimitiveTopology topo, LPipeKey *k)
+{
+    const DynState *d = &s_dyn;
+    memset(k, 0, sizeof *k);
+    k->base = *base;
+    k->cull = VK_CULL_MODE_NONE;
+    if (d->cull)
+        k->cull = d->cullmode == 0x404 ? VK_CULL_MODE_FRONT_BIT
+                : d->cullmode == 0x408 ? VK_CULL_MODE_FRONT_AND_BACK : VK_CULL_MODE_BACK_BIT;
+    k->front = d->front == 0x901 ? VK_FRONT_FACE_COUNTER_CLOCKWISE : VK_FRONT_FACE_CLOCKWISE;
+    k->topo = (uint32_t)topo;
+    k->dtest = d->dtest;
+    k->dwrite = d->dwrite;
+    k->dop = (uint32_t)cmp_op(d->dop, 0x203);
+    k->stest = d->stest;
+    if (d->stest) {
+        k->sfail = (uint32_t)stencil_op(d->sfail);
+        k->szfail = (uint32_t)stencil_op(d->szfail);
+        k->spass = (uint32_t)stencil_op(d->spass);
+        k->sop = (uint32_t)cmp_op(d->sop, 0x207);
+    }
+    memcpy(k->vfmt, s_lvi_fmt, sizeof k->vfmt);
+    memcpy(k->vstride, s_lvi_stride, sizeof k->vstride);
 }
 
 static void psh_key(const uint32_t *r, Nv2aPshKey *k)
@@ -2909,7 +3401,13 @@ static int upload_vertices(const Nv2aRawBatch *b)
             offs[a] = at + const_at + a * 16;
         }
     }
-    {
+    if (s_legacy) {
+        /* Vulkan 1.1: the layout goes into the pipeline (lpipe_get). */
+        for (a = 0; a < NV2A_RAW_ATTRS; a++) {
+            s_lvi_fmt[a] = (uint32_t)attr[a].format;
+            s_lvi_stride[a] = bind[a].stride;
+        }
+    } else {
         /* Vertex input is dynamic state: re-send it only when it changed
          * (or the command buffer is new) -- consecutive draws of a mesh type
          * repeat it, and NVK re-validates all 16 bindings each time. */
@@ -3227,8 +3725,8 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     key.depth = d != NULL;
     key.topo = cls;
-    pipe = pipe_get(&key);
-    if (!pipe)
+    pipe = s_legacy ? VK_NULL_HANDLE : pipe_get(&key);
+    if (!pipe && !s_legacy)
         return;
 
     {
@@ -3250,9 +3748,11 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
         }
     }
     begin_rendering(s, d);
+    if (!s_in_render)
+        return;                             /* no framebuffer (Vulkan 1.1 path) */
     s->dirty = 1;
     s->gen++;
-    if (pipe != cur_pipe || cur_pipe_gen != s_cb_gen || s_pipe_foreign) {
+    if (!s_legacy && (pipe != cur_pipe || cur_pipe_gen != s_cb_gen || s_pipe_foreign)) {
         vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
         cur_pipe = pipe;
         cur_pipe_gen = s_cb_gen;
@@ -3312,6 +3812,21 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
     }
     if (!upload_vertices(b))
         return;
+    if (s_legacy) {
+        /* Vulkan 1.1: the pipeline is known only now, with the vertex
+         * layout (upload_vertices) and the fixed state (apply_dynamic). */
+        LPipeKey lk;
+        legacy_key(&key, topo, &lk);
+        pipe = lpipe_get(&lk);
+        if (!pipe)
+            return;
+        if (pipe != cur_pipe || cur_pipe_gen != s_cb_gen || s_pipe_foreign) {
+            vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
+            cur_pipe = pipe;
+            cur_pipe_gen = s_cb_gen;
+            s_pipe_foreign = 0;
+        }
+    }
     {
         VkDeviceSize iat;
         if (b->vertex_count <= 65536) {
@@ -3356,7 +3871,7 @@ static void vk_draw_raw(const Nv2aRawBatch *b)
             wr[i].pImageInfo = &img[i - 2];
         }
     }
-    p_push_desc(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_layout, 0, 7, wr);
+    bind_desc(s_layout, s_dsl, 7, wr);
 
     VT("  vkCmdDrawIndexed %u\n", n);
     /* The constants were the ring's last allocation, so a repeat's set
@@ -3460,6 +3975,10 @@ static VkPipeline clear_pipe(uint32_t vkmask, int depth)
     ci.pColorBlendState = &cb;
     ci.pDynamicState = &dy;
     ci.layout = s_clr_layout;
+    if (s_legacy) {
+        ci.pNext = NULL;
+        ci.renderPass = rp_get(VK_FORMAT_B8G8R8A8_UNORM, depth ? s_depth_fmt : VK_FORMAT_UNDEFINED, 0);
+    }
     if (vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, pp) != VK_SUCCESS) {
         LOGE("clear pipeline creation failed\n");
         *pp = VK_NULL_HANDLE;
@@ -3528,6 +4047,8 @@ static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
             float c[4];
             argb_vec4(argb, c);
             begin_rendering(s, d);
+            if (!s_in_render)
+                return;
             vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, cp);
             vkCmdSetScissor(s_cb, 0, 1, &rect.rect);
             s_sc_cur = rect.rect;
@@ -3545,6 +4066,8 @@ static void vk_clear(const Nv2aSurface *sf, const Nv2aRenderState *rs,
     VT("clear %08X %ux%u flags %X rect %d,%d %ux%u depth %p\n", s->va, s->pw, s->ph, flags,
        rect.rect.offset.x, rect.rect.offset.y, rect.rect.extent.width, rect.rect.extent.height, (void *)d);
     begin_rendering(s, d);
+    if (!s_in_render)
+        return;
     vkCmdClearAttachments(s_cb, nca, ca, 1, &rect);
     VT("  cleared\n");
     s->dirty = 1;
@@ -3734,7 +4257,7 @@ static VkPipeline pp_pipe(VkFormat fmt)
         VkPushConstantRange pr = { VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32 };
         VkPipelineLayoutCreateInfo pli = { VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO };
         VkSamplerCreateInfo sci = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-        lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
+        lci.flags = s_legacy ? 0 : VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
         lci.bindingCount = 1;
         lci.pBindings = &b;
         if (vkCreateDescriptorSetLayout(s_dev, &lci, NULL, &s_pp_dsl) != VK_SUCCESS)
@@ -3785,6 +4308,10 @@ static VkPipeline pp_pipe(VkFormat fmt)
         ci.pColorBlendState = &cb;
         ci.pDynamicState = &dy;
         ci.layout = s_pp_layout;
+        if (s_legacy) {
+            ci.pNext = NULL;
+            ci.renderPass = rp_get(fmt, VK_FORMAT_UNDEFINED, 1);
+        }
         if (vkCreateGraphicsPipelines(s_dev, s_pcache, 1, &ci, NULL, &pipe) != VK_SUCCESS)
             pipe = VK_NULL_HANDLE;
     }
@@ -3843,6 +4370,18 @@ static int present_fxaa(VkSurf *s, VkImage dst, VkImageView dview, VkFormat fmt,
     ri.layerCount = 1;
     ri.colorAttachmentCount = 1;
     ri.pColorAttachments = &ca;
+    if (s_legacy) {
+        VkRenderPassBeginInfo bi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO };
+        bi.renderPass = rp_get(fmt, VK_FORMAT_UNDEFINED, 1);
+        bi.framebuffer = bi.renderPass ? fb_get(bi.renderPass, dview, VK_NULL_HANDLE, ext.width, ext.height)
+                                       : VK_NULL_HANDLE;
+        if (!bi.framebuffer)
+            return 0;          /* the blit path takes dst from UNDEFINED */
+        bi.renderArea.extent = ext;
+        bi.clearValueCount = 1;
+        bi.pClearValues = &ca.clearValue;
+        vkCmdBeginRenderPass(s_cb, &bi, VK_SUBPASS_CONTENTS_INLINE);
+    } else
     p_begin_rendering(s_cb, &ri);
     vkCmdBindPipeline(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
     vkCmdSetViewport(s_cb, 0, 1, &vp);
@@ -3854,12 +4393,15 @@ static int present_fxaa(VkSurf *s, VkImage dst, VkImageView dview, VkFormat fmt,
     wr.descriptorCount = 1;
     wr.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     wr.pImageInfo = &ii;
-    p_push_desc(s_cb, VK_PIPELINE_BIND_POINT_GRAPHICS, s_pp_layout, 0, 1, &wr);
+    bind_desc(s_pp_layout, s_pp_dsl, 1, &wr);
     pc[0] = (float)dx; pc[1] = (float)dy; pc[2] = (float)dw; pc[3] = (float)dh;
     pc[4] = 1.0f / (float)s->pw; pc[5] = 1.0f / (float)s->ph; pc[6] = pc[7] = 0.0f;
     vkCmdPushConstants(s_cb, s_pp_layout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof pc, pc);
     vkCmdDraw(s_cb, 3, 1, 0, 0);
-    p_end_rendering(s_cb);
+    if (s_legacy)
+        vkCmdEndRenderPass(s_cb);
+    else
+        p_end_rendering(s_cb);
     b.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     b.dstAccessMask = final == VK_IMAGE_LAYOUT_GENERAL ? VK_ACCESS_MEMORY_READ_BIT : 0;
     b.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -4045,6 +4587,8 @@ static void vk_flip(void)
         if (rr == VK_ERROR_OUT_OF_DATE_KHR) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
+        } else if ((rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) && idx >= s_sc_count) {
+            LOGE("acquired swapchain image %u of %u\n", idx, s_sc_count);
         } else if (rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) {
             VkImage dst = s_sc_images[idx];
             VT("flip %u: acquired image %u\n", s_frame, idx);

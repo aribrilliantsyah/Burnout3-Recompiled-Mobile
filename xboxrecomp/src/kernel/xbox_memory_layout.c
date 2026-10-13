@@ -84,12 +84,22 @@ static size_t g_span_size = 0;
 
 /* Hand a slice of the span reservation back so a fixed mapping can take its
  * place. Outside the span (or with no span) there is nothing of ours there. */
+#if !defined(_WIN32)
+void w32_arm_replace(void *lo, size_t len);       /* win32_compat.c */
+#endif
 static void span_carve(uintptr_t native, size_t size)
 {
     uintptr_t lo = (uintptr_t)g_span_base;
     if (!g_span_base || native < lo || native + size > lo + g_span_size)
         return;
+#if defined(_WIN32)
     VirtualFree((LPVOID)native, size, MEM_RELEASE);
+#else
+    /* POSIX: nothing is released. The next fixed mapping, the caller's,
+     * replaces this slice in place (MAP_FIXED); a hole here could be taken
+     * by another thread's mmap before it is mapped. */
+    w32_arm_replace((void *)native, size);
+#endif
 }
 static void *g_tiled_view = NULL;
 
@@ -2232,7 +2242,15 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
 #endif
         g_span_base = VirtualAlloc(NULL, g_span_size, MEM_RESERVE, PAGE_NOACCESS);
         if (g_span_base) {
+#if defined(_WIN32)
             VirtualFree(g_span_base, g_memory_size, MEM_RELEASE);
+#else
+            {
+                extern size_t view_take(const void *addr);   /* win32_compat.c */
+                view_take(g_span_base);   /* shutdown releases the span by size */
+                span_carve((uintptr_t)g_span_base, g_memory_size);
+            }
+#endif
             g_memory_base = MapViewOfFileEx(g_mapping_handle,
                                             FILE_MAP_ALL_ACCESS, 0, 0,
                                             g_memory_size, g_span_base);
@@ -3012,8 +3030,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
             /* Inside the reservation this hands back the slice we are about
              * to use; outside it (no reservation) this is a no-op on an
              * address we never held. */
-            if (g_span_base)
-                VirtualFree((LPVOID)mirror_base, g_memory_size, MEM_RELEASE);
+            span_carve(mirror_base, g_memory_size);
             g_mirror_views[m] = MapViewOfFileEx(
                 g_mapping_handle,
                 FILE_MAP_ALL_ACCESS,
