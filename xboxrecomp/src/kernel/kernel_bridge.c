@@ -2111,6 +2111,80 @@ static void bridge_KeSetEvent(void)
         g_eax = 0;
 }
 
+/* ── GPU fence event: a wait the pushbuffer can no longer end ──────────
+ *
+ * XDK D3D's fence wait (D3D8LTCG BlockOnTime) patches a NOP(5) into the
+ * ring at the fence when that is far enough ahead of DMA_GET, re-reads GET,
+ * and then sleeps with no timeout on an event its PGRAPH handler sets when
+ * the NOP traps. The executor runs on another host thread, and the patch
+ * (a plain store) against GET (another) is a store/load race neither side
+ * fences: the executor can read the fence's words before the patch is
+ * visible, D3D still sees GET behind it, and the trap never comes. On the
+ * phone (Mali, big.LITTLE cores) the game then froze at random -- menus,
+ * movies, races -- with PUT == GET and the main thread in
+ * KeWaitForSingleObject(device + 0x1DCC).
+ *
+ * When the pushbuffer is fully consumed every fence in it has been passed,
+ * which is all the event means. So a wait on the registered event returns
+ * once the ring has stayed empty a while (PUT == GET for 50 ms), as the
+ * trap would have. Waits that end normally are untouched. */
+static volatile uint32_t g_gpu_fence_event_va;
+
+void xbox_SetGpuFenceEvent(uint32_t guest_va)
+{
+    g_gpu_fence_event_va = guest_va;
+}
+
+static int gpu_ring_idle(void)
+{
+    const volatile uint32_t *r = (const volatile uint32_t *)
+        ((uint8_t *)xbox_GetMemoryOffset() + 0xFD800040u);
+    return r[0] == r[1];                  /* USER DMA_PUT == DMA_GET */
+}
+
+static NTSTATUS gpu_fence_wait(uint32_t object, HANDLE host, DWORD ms)
+{
+    DWORD start = GetTickCount(), idle_since = 0;
+    HANDLE none = NULL;
+    static unsigned rescued;
+
+    for (;;) {
+        DWORD slice = 10;
+        NTSTATUS st;
+        if (ms != INFINITE) {
+            DWORD spent = GetTickCount() - start;
+            if (spent >= ms)
+                return STATUS_TIMEOUT;
+            if (ms - spent < slice)
+                slice = ms - spent;
+        }
+        if (host) {
+            DWORD r;
+            xbox_kernel_busy(-1);
+            r = WaitForSingleObject(host, slice);
+            xbox_kernel_busy(1);
+            st = r == WAIT_OBJECT_0 ? STATUS_SUCCESS : STATUS_TIMEOUT;
+        } else {
+            st = kdisp_wait(1, &object, &none, 0, slice);
+        }
+        if (st != STATUS_TIMEOUT)
+            return st;
+        if (gpu_ring_idle()) {
+            DWORD now = GetTickCount();
+            if (!idle_since)
+                idle_since = now ? now : 1;
+            else if (now - idle_since >= 50) {
+                if (++rescued <= 20 || rescued % 100 == 0)
+                    fprintf(stderr, "  [D3D] fence wait ended: ring empty, no trap (%u so far)\n",
+                            rescued);
+                return STATUS_SUCCESS;
+            }
+        } else {
+            idle_since = 0;
+        }
+    }
+}
+
 /* ── KeWaitForSingleObject (ordinal 159) ─────────────────── */
 static void bridge_KeWaitForSingleObject(void)
 {
@@ -2124,6 +2198,10 @@ static void bridge_KeWaitForSingleObject(void)
     if (kdisp_is_guest(object)) {
         HANDLE none = NULL;
         (void)wait_reason; (void)wait_mode; (void)alertable;
+        if (object && object == g_gpu_fence_event_va) {
+            g_eax = (uint32_t)gpu_fence_wait(object, NULL, kdisp_timeout_ms(timeout_ptr));
+            return;
+        }
         g_eax = (uint32_t)kdisp_wait(1, &object, &none, 0,
                                      kdisp_timeout_ms(timeout_ptr));
         return;
@@ -2131,6 +2209,10 @@ static void bridge_KeWaitForSingleObject(void)
     h = ke_shadow_lookup(object);
     if (!h)
         h = bridge_resolve_handle(object);
+    if (h && object && object == g_gpu_fence_event_va) {
+        g_eax = (uint32_t)gpu_fence_wait(object, h, kdisp_timeout_ms(timeout_ptr));
+        return;
+    }
 
     g_eax = (uint32_t)xbox_KeWaitForSingleObject(
         h, wait_reason, wait_mode,

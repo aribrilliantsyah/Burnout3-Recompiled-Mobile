@@ -102,7 +102,12 @@ void sub_002442A0(void) { crt_memmove(); }
 #define B3_D3D_DEVICE_PTR 0x0035FB48u
 extern unsigned long long GetTickCount64(void);
 extern void nv2a_pb_set_semaphore_target(uint32_t guest_va);
+extern void xbox_SetGpuFenceEvent(uint32_t guest_va);
 extern void sub_00351770_gen(void);
+/* The event the fence wait sleeps on (0x003518B4: KeWaitForSingleObject(
+ * device + 0x1DCC, ..., no timeout) until the PGRAPH handler takes the
+ * NOP(5) trap it patched into the ring). */
+#define B3_D3D_FENCE_EVENT 0x1DCCu
 
 void sub_00351770(void)
 {
@@ -116,7 +121,9 @@ void sub_00351770(void)
         static uint32_t registered;
         if (sem && sem != registered) {
             nv2a_pb_set_semaphore_target(sem);
-            fprintf(stderr, "[D3D] GPU semaphore at 0x%08X\n", sem);
+            xbox_SetGpuFenceEvent(dev + B3_D3D_FENCE_EVENT);
+            fprintf(stderr, "[D3D] GPU semaphore at 0x%08X, fence event 0x%08X\n",
+                    sem, dev + B3_D3D_FENCE_EVENT);
             registered = sem;
         }
         if (getenv("B3_D3D_TRACE")) {
