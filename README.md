@@ -33,7 +33,7 @@ Early bring-up. The game is not playable on Android yet.
 | | |
 |---|---|
 | Linux (dev host): intros, menus, races, audio, saves | ✅ inherited from the Switch/Linux port |
-| Android build (`libmain.so` + APK `com.ryuna.b3x`) | 🚧 in progress |
+| Android build (`libmain.so` + APK `com.ryuna.b3x`, 31 MB) | ✅ builds; not yet run on a phone |
 | Boots to the title screen on a phone | ⏳ |
 | First-run menu: pick ISO / folder | ⏳ planned |
 | Touch controls | ⏳ planned (gamepads first) |

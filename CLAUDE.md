@@ -166,6 +166,19 @@ github.com/sp00nznet/burnout3 (software NV2A).
 - "You have accepted an invitation to play" box after Start on every boot:
   not investigated (A dismisses it).
 
+- **Android build (2026-10-13):** NDK r28c (28.2.13676358); the r29 dir in
+  the SDK is an empty failed install. `scripts/android/b3x.sh native` builds
+  `build/android/libmain.so` (157 MB with debug info, 28 MB stripped into
+  jniLibs) in ~10 min at -j3 with -O2 lifted code. bionic gaps handled in
+  win32_compat.c: no pthread_cancel (TerminateThread sends SIGUSR2, handler
+  pthread_exit), sched_setaffinity instead of pthread_setaffinity_np, no
+  explicit_bzero; main.c skips execinfo on Android. glslang is C++: link
+  c++_static + c++abi. d3d8_null.c serves Android (no desktop GL/epoxy).
+  Clang ignores `__attribute__((optimize("fp-contract=off")))` in
+  recomp_manual.c, so the file gets -ffp-contract=off on Android.
+  libmain.so LOAD segments are 16 KB aligned; NEEDED is only libm, SDL2,
+  vulkan, log, android, dl, c.
+
 ## Status of the Switch/Linux port this started from (2026-10-10)
 
 - Linux GL and Vulkan: EA/Criterion/RenderWare intros, title, profile create,
