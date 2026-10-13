@@ -151,6 +151,10 @@ public class LauncherActivity extends Activity {
         set.addView(slider("Gamepad opacity", Settings.K_PAD_OPACITY, 20, 100, 60, "%"));
         set.addView(hint("Bluetooth/USB controllers work as player 1. RT accelerates, LT brakes, A boosts."));
 
+        set.addView(section("DEBUG"));
+        set.addView(toggle("Debug log (b3x_log.txt)", Settings.K_DEBUG_LOG, false));
+        set.addView(hint("For bug reports: Android/data/com.ryuna.b3x/files/b3x_log.txt. Slower."));
+
         ScrollView sv = new ScrollView(this);
         sv.setBackground(box(PANEL, LINE));
         sv.setPadding(dp(12), dp(4), dp(12), dp(10));

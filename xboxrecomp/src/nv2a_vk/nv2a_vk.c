@@ -4562,15 +4562,16 @@ static void vk_flip(void)
         static struct timespec last;
         struct timespec now;
         if (on < 0) {
+            /* RECOMP_FPS_LOG=1: every 10 s; =2: every second. */
             const char *e = getenv("RECOMP_FPS_LOG");
-            on = e && *e == '1';
+            on = e && *e >= '1' && *e <= '9' ? *e - '0' : 0;
             clock_gettime(CLOCK_MONOTONIC, &last);
         }
         if (on) {
             double dt;
             clock_gettime(CLOCK_MONOTONIC, &now);
             dt = (double)(now.tv_sec - last.tv_sec) + (now.tv_nsec - last.tv_nsec) / 1e9;
-            if (dt >= 10.0) {
+            if (dt >= (on >= 2 ? 1.0 : 10.0)) {
                 extern void xbox_vblank_report(double, char *, size_t);
                 char vb[128];
                 xbox_vblank_report(dt, vb, sizeof vb);

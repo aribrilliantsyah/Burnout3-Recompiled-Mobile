@@ -2049,7 +2049,7 @@ static void watchdog_dump(const char *why)
 #undef WD_NV2A
     }
 
-    for (i = 0; i < 400 && esp; i++) {
+    for (i = 0; i < (getenv("RECOMP_WATCHDOG_REPEAT") ? 96u : 400u) && esp; i++) {
         uint32_t a = esp + i * 4;
         if (a < XBOX_STACK_BASE || a >= XBOX_STACK_TOP) break;
         fprintf(stderr, "    GS %08X %08X\n", a,
@@ -2068,6 +2068,19 @@ static DWORD WINAPI xbox_watchdog_thread(LPVOID unused)
     char why[64];
 
     (void)unused;
+    /* RECOMP_WATCHDOG_REPEAT=1: a snapshot every RECOMP_WATCHDOG_SECS for
+     * the whole run (a log to read after a hang that is not a crash). */
+    {
+        const char *rep = getenv("RECOMP_WATCHDOG_REPEAT");
+        if (rep && *rep == '1') {
+            unsigned n = 0;
+            for (;;) {
+                Sleep(s_watchdog_secs * 1000u);
+                snprintf(why, sizeof why, "heartbeat %u (%us)", ++n, (n) * s_watchdog_secs);
+                watchdog_dump(why);
+            }
+        }
+    }
     Sleep(s_watchdog_secs * 1000u);
     snprintf(why, sizeof why, "no exit after %us", s_watchdog_secs);
     watchdog_dump(why);

@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <SDL.h>
@@ -57,6 +58,7 @@ Java_com_ryuna_b3x_B3xActivity_nativeGetFps(JNIEnv *env, jclass cls)
 /* stdout/stderr -> logcat                                            */
 
 static int s_log_pipe[2];
+static FILE *s_log_file;     /* b3x_log.txt when B3X_LOG_FILE=1 */
 
 static void *log_thread(void *arg)
 {
@@ -74,6 +76,12 @@ static void *log_thread(void *arg)
         char *start = buf, *nl;
         while ((nl = strchr(start, '\n')) != NULL) {
             *nl = 0;
+            if (s_log_file) {
+                struct timespec t;
+                clock_gettime(CLOCK_MONOTONIC, &t);
+                fprintf(s_log_file, "%5ld.%03ld %s\n", (long)t.tv_sec, t.tv_nsec / 1000000, start);
+                fflush(s_log_file);
+            }
             __android_log_write(ANDROID_LOG_INFO, B3X_TAG, start);
             start = nl + 1;
         }
@@ -166,6 +174,17 @@ int SDL_main(int argc, char **argv)
     /* Launcher settings first, then the developer's b3x_env.txt over them. */
     load_env_file(ext, "b3x_launcher.txt");
     load_env_file(ext, "b3x_env.txt");
+    {
+        /* The whole log in a file too: logcat's ring is gone in minutes. */
+        const char *e = getenv("B3X_LOG_FILE");
+        if (e && *e == '1') {
+            char path[600];
+            snprintf(path, sizeof path, "%s/b3x_log.txt", ext);
+            s_log_file = fopen(path, "w");
+            if (s_log_file)
+                printf("[android] logging to %s\n", path);
+        }
+    }
 
     snprintf(game_dir, sizeof(game_dir), "%s/game", ext);
     setenv("NFSU2_GAME_DIR", game_dir, 0);

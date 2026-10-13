@@ -30,6 +30,7 @@ final class Settings {
     static final String K_PAD_AUTOHIDE = "pad_autohide";
     static final String K_PAD_SIZE = "pad_size";      // percent
     static final String K_PAD_OPACITY = "pad_opacity";// percent
+    static final String K_DEBUG_LOG = "debug_log";
 
     private Settings() { }
 
@@ -67,6 +68,12 @@ final class Settings {
         env.append("NFSU2_GAME_DIR=").append(gameDir(c)).append('\n');
         if (p.getBoolean(K_VK11, false)) env.append("RECOMP_VK_LEGACY=1\n");
         if (p.getBoolean(K_FRAME_LOCK, false)) env.append("B3_FRAME_LOCK=1\n");
+        if (p.getBoolean(K_DEBUG_LOG, false)) {
+            // Android/data/com.ryuna.b3x/files/b3x_log.txt: a guest snapshot
+            // every 10 s and the FPS.
+            env.append("B3X_LOG_FILE=1\nRECOMP_WATCHDOG_SECS=10\nRECOMP_WATCHDOG_REPEAT=1\n");
+            env.append("RECOMP_FPS_LOG=2\n");
+        }
         write(new File(dir, "b3x_launcher.txt"), env.toString());
 
         String opt = "scale=" + p.getInt(K_SCALE, 100) + "\n"
