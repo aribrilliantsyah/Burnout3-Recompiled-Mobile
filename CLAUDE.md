@@ -1,45 +1,47 @@
 # Burnout 3: Takedown (Xbox) static recompilation — notes for Claude
 
 Xbox NTSC-U Burnout 3: Takedown (title 0x4541005B, XDK 5849, Criterion
-RenderWare, D3D8LTCG), lifted to C with xboxrecomp and built for Linux and
-Nintendo Switch (libnx NRO). Started 2026-10-08 from the NFS Carbon port
-(`..\nfsc-xbox`, itself from NFSU1/NFSU2; read `..\nfsu2-xbox\CLAUDE.md` for
-everything the runtime does on Horizon). Repo: git@github.com:antoxa2584x/burnout3-sw.git, branch `switch` (fork of sp00nznet/burnout3; `main` follows upstream, remote `upstream`). core.fileMode is off: files on /mnt/c look executable.
+RenderWare, D3D8LTCG), lifted to C with xboxrecomp. **This repo is the
+Android port** (package `com.ryuna.b3x`, arm64-v8a, Vulkan), started
+2026-10-13 from antoxa2584x/burnout3-sw `switch` v0.2 (`0bf84b5`; its git
+history is kept outside the repo in `../burnout3-sw.git-backup`). Fresh
+history on `main`, no remote yet. Linux is the development host.
+Target phones: Snapdragon 7s Gen 2 (Adreno 710), Dimensity 920 (Mali-G68).
 
-Upstream has a Windows-only Burnout 3 port on the stock toolkit
-(github.com/sp00nznet/burnout3, software NV2A, races at 2-4 fps); a read-only
-clone is in `/root/b3x/ref/burnout3` (its docs/boot.md lists what the title
-needed). This port uses the NFS toolkit fork instead (GPU renderers, Switch).
+The Switch port came from the NFS Carbon/NFSU2 ports; its Switch-only files
+are in `references/switch/` (not built). Upstream Windows port:
+github.com/sp00nznet/burnout3 (software NV2A).
 
 ## Rules
 
-- Never commit game data (disc, `default.xbe`, `switch_sd/`) or generated C
-  (`gen/`). Ask before committing or pushing.
-- The Switch build reads the **unpacked** disc at `sdmc:/switch/b3x/game/`.
-- Renderer work targets Vulkan (nv2a_vk), as in the NFS ports.
-- Linux test hygiene as NFSU2: one run at a time, kill by PID (`run/pid`)
-  with **-9** (b3_recomp ignores SIGTERM; live.sh now kill -9s the previous
-  pid). Never `pkill -f` a pattern that matches your own shell. A stale
-  instance shares run.log, pad.cmd and the FRAME_TRACE flag with the new one.
+- Never commit game data (`roms/`: disc, extracted `game/`, `default.xbe`)
+  or generated C (`.work/gen/`). The APK never carries game data either.
+- The user commits every change right away; no push until a remote is given.
+- Renderer work targets Vulkan (nv2a_vk). Android has no desktop GL.
+- Linux test hygiene: one run at a time, kill by PID with **-9** (b3_recomp
+  ignores SIGTERM). Never `pkill -f` a pattern that matches your own shell.
 
 ## Layout and builds
 
 | Where | What |
 |---|---|
-| `/root/b3x/` (WSL) | `game/` extracted disc, `gen/` lifted C, `build-linux/` (GL), `build-vk-linux/` (Vulkan, lavapipe), `run/`, `ref/burnout3` |
-| `/root/b3x/run.sh` | run `SECS` with `PAD=` script, dumps every `DUMPN` frames to `run/d/` |
-| `/root/b3x/live.sh` | start with a live pad file `run/pad.cmd` (`VK=1 BIN=...build-vk-linux/b3_recomp` for Vulkan, `EXTRA="VAR=1 ..."`) |
-| `/root/b3x/step.sh "<pad line>" N` | press, wait for N new dumps, newest frame -> scratchpad last.png |
-| `/root/b3x/nav.sh globe\|car\|race` | from boot to that screen with the saved profile (after live.sh) |
-| `/root/b3x/peek.py PID ADDR '*PTR+OFF'` | read guest memory of a running build |
+| `roms/` (ignored) | the disc ISO and `roms/game/` (extracted, `xboxrecomp: python -m tools.xiso unpack`) |
+| `.work/` (ignored) | `venv/` (capstone), `gen/` lifted C, `run/` logs and dumps, `android-deps/` |
+| `build/linux-vk/` | Linux Vulkan build (`-DNFSU2_VULKAN=ON -DNFSU2_GEN_DIR=$PWD/.work/gen`) |
+| `build/android/` | NDK build of `libmain.so` |
+| `scripts/android/` | `deps.sh` (SDL2, glslang), `b3x.sh` (build/install/run/log), `test-runtime.sh` |
+| `android/` | Gradle app on SDLActivity |
+| `docs/research/android-re.md` | disc identity, RE notes, tool results |
 | `xboxrecomp/` | vendored toolkit = nfsc-xbox's + the changes below |
 
-- Disc: `xboxrecomp\Burnout 3 - Takedown (USA).iso`, `python3 -m tools.xiso unpack`.
 - Regenerate: `tools/regen.sh` (`LIFT_ONLY=1` after manual-override edits;
   `TRACE_FUNCS=<json list>` adds `[TRACE]` entry logging).
-- Linux: `cmake --build /root/b3x/build-linux -j12`; Vulkan:
-  `/root/b3x/build-vk-linux` (`-DNFSU2_VULKAN=ON`).
-- Saves land in `/root/b3x/game/UDATA/4541005b/` (profile "BURNOUT" made there).
+- REA (Reverse Engineer Anything MCP) cannot open XBE files (no Ghidra
+  configured, XBE not a supported format); use `xboxrecomp/tools`
+  (xbe_parser, disasm, func_id) for the binary and REA's adb tools for
+  devices.
+- The Switch-era helper scripts (`/root/b3x/run.sh`, `live.sh`, `step.sh`,
+  `nav.sh`, `peek.py`, `clockscan.py`) are not in this repo.
 
 ## Findings
 
@@ -164,7 +166,7 @@ needed). This port uses the NFS toolkit fork instead (GPU renderers, Switch).
 - "You have accepted an invitation to play" box after Start on every boot:
   not investigated (A dismisses it).
 
-## Status (2026-10-10)
+## Status of the Switch/Linux port this started from (2026-10-10)
 
 - Linux GL and Vulkan: EA/Criterion/RenderWare intros, title, profile create,
   save and load, menus, training videos; races render the full 3D world

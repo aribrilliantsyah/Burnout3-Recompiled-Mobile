@@ -2,134 +2,105 @@
 
 <img src="https://cdn2.steamgriddb.com/logo/816d385f9dfa8b6e2f3637f77b97ac9c.png" alt="Burnout 3: Takedown" width="520">
 
-### Xbox static recompilation for Nintendo Switch and Linux
+### Xbox static recompilation for Android
 
 The original Xbox (NTSC-U) release of **Burnout 3: Takedown**, lifted
-instruction by instruction to C and running natively, with no emulator.
+instruction by instruction to C and running natively on arm64 phones, with
+no emulator.
 
-![Switch](https://img.shields.io/badge/Nintendo%20Switch-homebrew-E60012?logo=nintendoswitch&logoColor=white)
-![Linux](https://img.shields.io/badge/Linux-x86__64-FCC624?logo=linux&logoColor=black)
-![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)
-![OpenGL](https://img.shields.io/badge/OpenGL-renderer-5586A4?logo=opengl&logoColor=white)
-![Version](https://img.shields.io/badge/version-0.2-blue)
+![Android](https://img.shields.io/badge/Android-arm64--v8a-3DDC84?logo=android&logoColor=white)
+![Vulkan](https://img.shields.io/badge/Vulkan-1.1+-AC162C?logo=vulkan&logoColor=white)
+![Status](https://img.shields.io/badge/status-bring--up-orange)
+![Version](https://img.shields.io/badge/version-0.0--dev-blue)
 
-[Features](#-features) · [Playing on Switch](#%EF%B8%8F-playing-on-switch) · [Building](#%EF%B8%8F-building) · [Configuration](#%EF%B8%8F-configuration) · [Status](#-status)
+[Status](#-status) · [Devices](#-target-devices) · [Building](#%EF%B8%8F-building) · [Configuration](#%EF%B8%8F-configuration) · [Layout](#-project-layout) · [Credits](#-credits)
 
 </div>
 
 ---
 
 > [!IMPORTANT]
-> **No game data is included.** You need your own copy of the Xbox disc,
-> extracted (`default.xbe`, `Data/`, `Tracks/`, `ovid/`, `pveh/`, `sound/`, ...).
+> **No game data is included, and none ever will be.** The APK carries only
+> the recompiled engine. You need your own copy of the Xbox disc (NTSC-U,
+> title ID `0x4541005B`). A first-run menu that lets you pick the ISO or the
+> extracted folder from your phone's storage is planned; until then the
+> developer script pushes an extracted disc over adb.
 
-Built on the runtime of the NFS Underground 2 / Carbon Switch ports (GPU
-renderers, Horizon support). An upstream Windows port with a software GPU
-exists at [sp00nznet/burnout3](https://github.com/sp00nznet/burnout3).
+## 📍 Status
 
-## ✨ Features
+Early bring-up. The game is not playable on Android yet.
 
-- 🏁 **Native code**: the whole game runs as recompiled C, built with
-  [xboxrecomp](https://github.com/sp00nznet/xboxrecomp)
-- 🎮 **Two renderers**: Vulkan (NVK on Switch) and OpenGL, with render
-  scaling
-- 🌆 **The full 3D world**: races, the car-select garage, motion blur and
-  bloom (the game's off-screen scene composite), fog
-- 🪞 **Car reflections** (Vulkan): the game's dynamic reflection cube with
-  its light-strip highlights
-- 🖼️ **Picture options** in **Driver Details → Settings → Gameplay**
-  (Vulkan): **Resolution Scale** 1x / 1.5x / 2x / 2.5x, **Anti-Aliasing**
-  (FXAA) and **Anisotropic Filtering** Off-16x, applied at once and kept in
-  `b3x_options.txt`; mipmaps with trilinear filtering
-- ⏱️ **Real-time races at any frame rate**: the game steps its simulation
-  by the time that really passed instead of one 60 Hz step per frame, so
-  races below 60 fps are not slow motion
-- 🔊 **Audio** through an emulated Xbox APU (engine, effects, EA Trax,
-  speech), 5.1 downmixed to stereo
-- 🎬 **Movies** (XMV) with a native colour converter
-- 💾 **Profiles** save and load (`game/UDATA`), including after racing
+| | |
+|---|---|
+| Linux (dev host): intros, menus, races, audio, saves | ✅ inherited from the Switch/Linux port |
+| Android build (`libmain.so` + APK `com.ryuna.b3x`) | 🚧 in progress |
+| Boots to the title screen on a phone | ⏳ |
+| First-run menu: pick ISO / folder | ⏳ planned |
+| Touch controls | ⏳ planned (gamepads first) |
 
-## 🕹️ Playing on Switch
+The plan for this stage is in
+[docs/superpowers/plans/2026-10-13-android-port-bootstrap.md](docs/superpowers/plans/2026-10-13-android-port-bootstrap.md).
 
-1. Copy the NRO to `sdmc:/switch/b3x/` (`b3x-vulkan.nro` for the Vulkan
-   build, `b3x.nro` for OpenGL).
-2. Copy the **extracted** disc (not the ISO) to `sdmc:/switch/b3x/game/`.
-3. Start it with **title takeover**: hold **R** while launching any game.
-   Applet mode leaves too little memory.
+## 📱 Target devices
 
-```
-sdmc:/switch/b3x/
-├── b3x-vulkan.nro
-├── b3x_env.txt       optional settings, KEY=VALUE per line
-├── b3x_options.txt   written by the in-game picture options
-└── game/
-    ├── default.xbe
-    ├── UDATA/        your profiles
-    └── ...
-```
+| SoC | CPU | GPU / driver |
+|---|---|---|
+| Qualcomm Snapdragon 7s Gen 2 | 4x Cortex-A78 2.4 GHz + 4x A55 | Adreno 710, Vulkan 1.3 |
+| MediaTek Dimensity 920 | 2x Cortex-A78 2.5 GHz + 6x A55 | Mali-G68 MC4, Vulkan 1.1 |
 
-Buttons map by label (Switch A = Xbox A). Settings go in `b3x_env.txt`
-(see [Configuration](#%EF%B8%8F-configuration)) and the log is written to the
-same folder (`b3x_log.txt`).
+Android 11 (API 30) or newer, arm64-v8a, Vulkan required. The game logic,
+the NV2A command processor and the APU all run on the CPU, so per-core speed
+matters most; both chips are well ahead of the Switch's Tegra X1, which runs
+this code at 40-55 fps.
 
 ## 🛠️ Building
 
+Development happens on Linux: the same code runs there as a desktop program,
+which is where most debugging is done.
+
 <details open>
-<summary><b>1. Lift the XBE to C</b></summary>
+<summary><b>1. Extract the disc and lift the XBE to C</b></summary>
 
 ```sh
-# Writes B3_GEN_DIR (default /root/b3x/gen)
-B3_XBE=/path/to/game/default.xbe B3_GEN_DIR=/path/to/gen tools/regen.sh
+python3 -m venv .work/venv && .work/venv/bin/pip install -r tools/requirements.txt
+# Your own image goes in roms/ (git-ignored)
+(cd xboxrecomp && ../.work/venv/bin/python -m tools.xiso unpack "../roms/<disc>.iso" -o ../roms/game)
+tools/regen.sh          # roms/game/default.xbe -> .work/gen/
 ```
 
 </details>
 
 <details open>
-<summary><b>2a. Linux</b> (SDL2 + OpenGL or Vulkan)</summary>
+<summary><b>2a. Linux</b> (SDL2 + Vulkan or OpenGL)</summary>
 
 ```sh
-cmake -S . -B build -G Ninja -DNFSU2_GEN_DIR=/path/to/gen   # add -DNFSU2_VULKAN=ON for Vulkan
-cmake --build build
-NFSU2_GAME_DIR=/path/to/game build/b3_recomp
+cmake -S . -B build/linux-vk -G Ninja -DNFSU2_VULKAN=ON -DNFSU2_GEN_DIR=$PWD/.work/gen
+cmake --build build/linux-vk -j3
+NFSU2_GAME_DIR=$PWD/roms/game build/linux-vk/b3_recomp
 ```
 
 </details>
 
 <details open>
-<summary><b>2b. Nintendo Switch</b> (devkitA64, switch-sdl2, switch-mesa)</summary>
+<summary><b>2b. Android</b> (NDK r29, SDK 36, a phone with USB debugging)</summary>
 
 ```sh
-NFSU2_GEN_DIR=/path/to/gen NFSU2_GAME_SRC=/path/to/game switch/build.sh
-# Vulkan build (needs mesa-switch NVK and glslang for Switch)
-VULKAN=1 JOBS=6 NFSU2_GEN_DIR=/path/to/gen switch/build.sh
+scripts/android/b3x.sh all          # deps, native, apk, install, run, log
+scripts/android/b3x.sh push-game    # dev only: copy roms/game to the phone
+scripts/android/b3x.sh -s <serial> install run log
 ```
 
+`b3x.sh` commands: `deps native apk install push-game env run log stop all`.
+`ANDROID_HOME` must point at the SDK.
+
 </details>
-
-### Project layout
-
-| Path | What |
-|---|---|
-| `src/main.c` | boot and runtime defaults |
-| `src/recomp_manual.c` | hand-written overrides of lifted functions (library hooks, XMV colour converter, simulation stepping, the Gameplay picture rows) |
-| `src/switch_nx.c` | Switch log device, env file, exception handler, loading screen |
-| `config/seed_functions.json` | entry points the static pass cannot see |
-| `xboxrecomp/` | the toolkit (MIT), vendored with this port's changes: NV2A renderers (Vulkan, OpenGL), SDL audio, Switch platform layer, translator fixes |
-| `tools/regen.sh` | XBE → lifted C (`gen/`, never committed) |
-| `switch/build.sh` | Switch NRO build + SD-card staging |
 
 ## ⚙️ Configuration
 
-On Linux these are ordinary environment variables. On the Switch they go in
-`sdmc:/switch/b3x/b3x_env.txt`, one `KEY=VALUE` per line (`#` starts a
-comment). Anything left out runs at its default. Most of the list is for
-debugging, so the sections below are folded.
-
-```ini
-# sdmc:/switch/b3x/b3x_env.txt
-RECOMP_GL_SCALE=1.5
-NFSU2_CPU_MHZ=1785
-```
+On Linux these are environment variables. On Android they go in
+`b3x_env.txt` in the app's external files directory
+(`/sdcard/Android/data/com.ryuna.b3x/files/`), one `KEY=VALUE` per line, `#`
+starts a comment; `scripts/android/b3x.sh env` pushes the repo's copy.
 
 <details>
 <summary><b>Build and code generation</b></summary>
@@ -137,17 +108,11 @@ NFSU2_CPU_MHZ=1785
 | Variable | Meaning |
 |---|---|
 | `XBOXRECOMP_DIR` | Toolkit to build or regenerate with (default: the vendored `xboxrecomp/`). |
-| `B3_XBE` | `default.xbe` to lift (`tools/regen.sh`). |
-| `B3_GEN_DIR` / `NFSU2_GEN_DIR` | Directory for the lifted C (default `/root/b3x/gen`). |
+| `B3_XBE` | `default.xbe` to lift (default `roms/game/default.xbe`). |
+| `B3_GEN_DIR` / `NFSU2_GEN_DIR` | Directory for the lifted C (default `.work/gen`). |
+| `PYTHON` | `regen.sh`: interpreter with capstone (default `.work/venv/bin/python`). |
 | `LIFT_ONLY=1` | `regen.sh`: only re-lift (enough after translator or `recomp_manual.c` changes; seed changes need the full run). |
 | `TRACE_FUNCS` | `regen.sh`: JSON list of addresses whose entries are logged (`[TRACE]`). |
-| `NFSU2_GAME_SRC` | `switch/build.sh`: extracted disc to stage (default `/root/b3x/game`). |
-| `SD_ROOT` | `switch/build.sh`: staging SD-card root (default `<repo>/switch_sd`). |
-| `BUILD_DIR` | `switch/build.sh`: build directory (default `/root/b3x/build-switch`, `-vk` with `VULKAN=1`). |
-| `JOBS` | `switch/build.sh`: parallel compile jobs (6 fits `-O2` in RAM). |
-| `VULKAN=1` | `switch/build.sh`: build the Vulkan renderer (`b3x-vulkan.nro`). |
-| `NVK_SDK`, `GLSLANG_DIR` | `switch/build.sh` with `VULKAN=1`: mesa-switch NVK install and Switch glslang. |
-| `LTO=1` | `switch/build.sh`: link-time optimisation of the lifted code. |
 
 </details>
 
@@ -156,25 +121,11 @@ NFSU2_CPU_MHZ=1785
 
 | Variable | Meaning |
 |---|---|
-| `NFSU2_GAME_DIR` | Extracted disc (Linux; default `./game`). The Switch always uses `sdmc:/switch/b3x/game/`. |
+| `NFSU2_GAME_DIR` | Extracted disc (Linux default `./game`; Android default `<external files>/game`). |
 | `NFSU2_GL=0` | Use the executor's CPU renderer instead of the GPU renderer. |
 | `NFSU2_APU=0` | No emulated APU (no sound). |
 | `B3_FRAME_LOCK=1` | One simulation step per rendered frame, as on the Xbox (races go slow motion below 60 fps). |
 | `NFSU2_EXIT_TRACE=1` | Print the guest state at exit. |
-
-</details>
-
-<details>
-<summary><b>Switch (Horizon)</b></summary>
-
-| Variable | Meaning |
-|---|---|
-| `NFSU2_CPU_MHZ`, `NFSU2_GPU_MHZ`, `NFSU2_MEM_MHZ` | Clocks (opt-in; more heat and battery). The log shows `[clock] ...`. |
-| `NFSU2_NO_LOG=1` / `NFSU2_LOG=0` | No log file, no `[perf]` reports, no profiler. |
-| `NFSU2_LOG_SYNC=1` | Write every log line to the card at once (slow; for hangs). |
-| `NFSU2_LOADER=0` | No loading screen before the first frame. |
-| `RECOMP_NX_PROFILE` | Sampling profiler into `prof.bin`: 1 = busy threads, 2 = every thread above 2%. |
-| `RECOMP_NX_AUDIO_PRIO=0` | Leave the audio threads at the default priority. |
 
 </details>
 
@@ -185,32 +136,31 @@ NFSU2_CPU_MHZ=1785
 |---|---|
 | `RECOMP_GIL_EAGER=1` | Hand the guest lock over by guest priority. |
 | `RECOMP_VBLANK` | Vblank interrupt for D3D (default 1). |
-| `RECOMP_NO_MIRRORS=1` | Map no RAM mirrors (what the Switch does; for reproducing it on a desktop). |
-| `RECOMP_QUIET` | 1 = no periodic kernel/GPU summaries (Switch default), 0 = show them. |
+| `RECOMP_NO_MIRRORS=1` | Map no RAM mirrors (Android default). |
+| `RECOMP_QUIET` | 1 = no periodic kernel/GPU summaries, 0 = show them. |
 | `XBOX_LOG_LEVEL` | Kernel log level (0 errors … trace). |
 
 </details>
 
 <details>
-<summary><b>Graphics (GL and Vulkan renderers)</b></summary>
+<summary><b>Graphics (Vulkan; GL on Linux only)</b></summary>
 
 | Variable | Meaning |
 |---|---|
 | `RECOMP_GL_SCALE` | Render resolution multiple (fractions allowed). Vulkan: only until Gameplay → Resolution Scale is changed. |
-| `RECOMP_GL_THREAD=1` | GL renderer: GL calls on their own thread. |
 | `RECOMP_PROG_CACHE` | Shader/pipeline cache file, `=0` off. |
 | `RECOMP_CULL=0` | No off-screen batch culling (the port's default). |
-| `RECOMP_VK_MIPS=0` | Vulkan: no mipmaps. |
-| `RECOMP_VK_ANISO` | Vulkan: anisotropic filtering cap, 1..16. |
-| `RECOMP_VK_LOD_BIAS` | Vulkan: mip bias, negative = sharper (default -0.25). |
-| `RECOMP_VK_FXAA=0` | Vulkan: no FXAA. |
-| `RECOMP_VK_SQUARE=0` | Vulkan: in 16:9, no extra 4/3 columns for square pixels. |
-| `RECOMP_VK_CUBE=0` | Vulkan: no reflection cube maps. |
-| `RECOMP_VK_HEADLESS=1` | Vulkan on Linux: no window (also implied by `SDL_VIDEODRIVER=offscreen`). |
-| `RECOMP_VK_VALIDATION=1` | Vulkan on Linux: Khronos validation layer. |
+| `RECOMP_VK_MIPS=0` | No mipmaps. |
+| `RECOMP_VK_ANISO` | Anisotropic filtering cap, 1..16. |
+| `RECOMP_VK_LOD_BIAS` | Mip bias, negative = sharper (default -0.25). |
+| `RECOMP_VK_FXAA=0` | No FXAA. |
+| `RECOMP_VK_SQUARE=0` | In 16:9, no extra 4/3 columns for square pixels. |
+| `RECOMP_VK_CUBE=0` | No reflection cube maps. |
+| `RECOMP_VK_HEADLESS=1` | Linux: no window (also implied by `SDL_VIDEODRIVER=offscreen`). |
+| `RECOMP_VK_VALIDATION=1` | Khronos validation layer. |
 | `RECOMP_GL_DUMP=<prefix>[,every]` | Write presented frames as BMP (every N frames, default 60). |
-| `RECOMP_VK_DUMP_SURF=<va>[,<va>...]` | Vulkan: also dump these surfaces with each dumped frame; `RECOMP_VK_DUMP_RAW=1` adds BGRA files with alpha. |
-| `RECOMP_FRAME_TRACE=<flag file>` | When the file exists: one line per draw/clear of the next frame (target, state, textures, combiner, first vertices). |
+| `RECOMP_VK_DUMP_SURF=<va>[,<va>...]` | Also dump these surfaces with each dumped frame; `RECOMP_VK_DUMP_RAW=1` adds BGRA files with alpha. |
+| `RECOMP_FRAME_TRACE=<flag file>` | When the file exists: one line per draw/clear of the next frame. |
 | `RECOMP_FPS_LOG=1` | Presented frames per 10 s. |
 
 </details>
@@ -228,17 +178,31 @@ NFSU2_CPU_MHZ=1785
 
 </details>
 
-## 📊 Status
+## 📂 Project layout
 
-| | |
+| Path | What |
 |---|---|
-| Intro movies, title, menus | ✅ working |
-| Profile create / save / load | ✅ working (saves after racing fixed in 0.1) |
-| 3D world: races, garage, motion blur, reflections | ✅ working (GL has no reflections) |
-| Audio: music, engine, effects | ✅ working |
-| Races at real-time speed below 60 fps | ✅ working |
-| Picture options (Vulkan) | ✅ working |
-| Race training videos | ⚠️ play in full before an event's first race (cannot be skipped) |
-| Switch | 🧪 runs on hardware (Vulkan), 40-55 fps in races; being tuned |
+| `src/main.c` | boot and runtime defaults |
+| `src/recomp_manual.c` | hand-written overrides of lifted functions (library hooks, XMV colour converter, simulation stepping, the Gameplay picture rows) |
+| `config/seed_functions.json` | entry points the static pass cannot see |
+| `xboxrecomp/` | the toolkit (MIT), vendored with this port's changes: NV2A renderers (Vulkan, OpenGL), SDL audio, translator fixes |
+| `tools/regen.sh` | XBE → lifted C (`.work/gen/`, never committed) |
+| `scripts/android/` | Android dependency build, build/install/run script |
+| `android/` | Gradle app `com.ryuna.b3x` (SDLActivity) |
+| `docs/research/` | format and reverse-engineering notes |
+| `references/switch/` | the Switch-only files this port started from (not built) |
+| `roms/` | your disc image and its extraction (git-ignored) |
 
-See [CHANGELOG.md](CHANGELOG.md) and [ROADMAP.md](ROADMAP.md).
+## 🙏 Credits
+
+- [sp00nznet](https://github.com/sp00nznet): the Burnout 3 recompilation and
+  the [xboxrecomp](https://github.com/sp00nznet/xboxrecomp) toolkit (MIT).
+- [antoxa2584x](https://github.com/antoxa2584x/burnout3-sw): the Switch/Linux
+  port with the GPU renderers this Android port is built from.
+
+Burnout 3: Takedown is © Electronic Arts / Criterion Games. This project is
+not affiliated with them and contains none of their data.
+
+## 📜 License
+
+[MIT](LICENSE), as the projects it is built on.
