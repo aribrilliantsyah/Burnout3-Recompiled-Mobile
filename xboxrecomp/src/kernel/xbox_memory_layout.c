@@ -81,6 +81,16 @@ static void *g_mirror_views[XBOX_NUM_MIRRORS] = {0};
  * question. */
 static void *g_span_base = NULL;
 static size_t g_span_size = 0;
+
+/* Hand a slice of the span reservation back so a fixed mapping can take its
+ * place. Outside the span (or with no span) there is nothing of ours there. */
+static void span_carve(uintptr_t native, size_t size)
+{
+    uintptr_t lo = (uintptr_t)g_span_base;
+    if (!g_span_base || native < lo || native + size > lo + g_span_size)
+        return;
+    VirtualFree((LPVOID)native, size, MEM_RELEASE);
+}
 static void *g_tiled_view = NULL;
 
 /* Contiguous / physical memory window (see MemoryLayoutInit).
@@ -2208,6 +2218,18 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          * VirtualFree releases just the slice about to be used, so each view
          * replaces our own reservation rather than racing for free space. */
         g_span_size = g_memory_size * (size_t)(1 + XBOX_NUM_MIRRORS);
+#if !defined(_WIN32) && UINTPTR_MAX > 0xFFFFFFFFu
+        /* The whole 4 GB guest space, not just RAM and its mirrors: the
+         * contiguous window, the tiled aperture, the device apertures and the
+         * extended VMA all sit at fixed guest addresses up to 0xFF100000, and
+         * each is mapped at base + guest VA without displacing anything.
+         * Where the host hands out mappings top-down (Android's arm64 mmap
+         * area ends just under the libraries), everything above a base the
+         * OS chose is already somebody else's, and every one of those failed.
+         * Reserving the span makes it ours; it is address space only. */
+        if (g_span_size < ((size_t)1 << 32))
+            g_span_size = (size_t)1 << 32;
+#endif
         g_span_base = VirtualAlloc(NULL, g_span_size, MEM_RESERVE, PAGE_NOACCESS);
         if (g_span_base) {
             VirtualFree(g_span_base, g_memory_size, MEM_RELEASE);
@@ -2688,6 +2710,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      */
     {
         uintptr_t contig_native = XBOX_CONTIG_BASE + g_memory_offset;
+        span_carve(contig_native, XBOX_CONTIG_SIZE);
         g_contig_mapping = CreateFileMappingW(
             INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
             0, (DWORD)XBOX_CONTIG_SIZE, NULL);
@@ -2733,6 +2756,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      */
     {
         uintptr_t nv2a_native = XBOX_NV2A_BASE + g_memory_offset;
+        span_carve(nv2a_native, XBOX_NV2A_SIZE);
         g_nv2a_memory = VirtualAlloc(
             (LPVOID)nv2a_native,
             XBOX_NV2A_SIZE,
@@ -2778,6 +2802,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
      */
     {
         uintptr_t mcpx_native = XBOX_MCPX_BASE + g_memory_offset;
+        span_carve(mcpx_native, XBOX_MCPX_SIZE);
         g_mcpx_memory = VirtualAlloc(
             (LPVOID)mcpx_native,
             XBOX_MCPX_SIZE,
@@ -2876,6 +2901,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
     {
         uintptr_t flash_native = XBOX_FLASH_BASE + g_memory_offset;
 
+        span_carve(flash_native, XBOX_FLASH_SIZE);
         g_flash_memory = VirtualAlloc(
             (LPVOID)flash_native,
             XBOX_FLASH_SIZE,
@@ -3038,6 +3064,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
         uint64_t extvma_size = (uint64_t)0x7FFE0000u - aliased_top;
         void *extvma_base = (void *)((uintptr_t)g_memory_base + (uintptr_t)aliased_top);
 
+        span_carve((uintptr_t)extvma_base, (size_t)extvma_size);
         if (VirtualAlloc(extvma_base, (SIZE_T)extvma_size, MEM_RESERVE, PAGE_NOACCESS)) {
             g_xbox_extvma_reserved = 1;
             fprintf(stderr, "  Extended VMA: reserved %llu MB at %p\n",
@@ -3088,6 +3115,7 @@ BOOL xbox_MemoryLayoutInit(const void *xbe_data, size_t xbe_size)
          */
         if (tiled_size > XBOX_CONTIG_SIZE)
             tiled_size = XBOX_CONTIG_SIZE;
+        span_carve(tiled_native, tiled_size);
         g_tiled_view = g_contig_mapping
             ? MapViewOfFileEx(
                 g_contig_mapping,
