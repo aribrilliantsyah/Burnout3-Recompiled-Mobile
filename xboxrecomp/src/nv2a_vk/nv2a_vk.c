@@ -2512,6 +2512,8 @@ static void prewarm(void)
 
 /* ── Context ──────────────────────────────────────────────────────── */
 
+static int s_sc_lost, s_sc_rebuild;   /* Android: surface gone / to remake */
+
 static int create_swapchain(void)
 {
     VkSurfaceCapabilitiesKHR caps;
@@ -2594,6 +2596,44 @@ static int create_swapchain(void)
             s_sc_extent.width, s_sc_extent.height, s_sc_count, s_sc_format, mode);
     return 1;
 }
+
+#if defined(__ANDROID__)
+/* A new VkSurfaceKHR on the window's new native surface, and a swapchain
+ * on it. Everything else (device, images, pipelines) survives. */
+static void android_surface_rebuild(void)
+{
+    uint32_t i;
+    s_sc_rebuild = 0;
+    vkDeviceWaitIdle(s_dev);
+    for (i = 0; i < VK_MAX_SC; i++)
+        if (s_sc_views[i]) {
+            fb_forget_view(s_sc_views[i]);
+            vkDestroyImageView(s_dev, s_sc_views[i], NULL);
+            s_sc_views[i] = VK_NULL_HANDLE;
+        }
+    if (s_swapchain) {
+        vkDestroySwapchainKHR(s_dev, s_swapchain, NULL);
+        s_swapchain = VK_NULL_HANDLE;
+    }
+    if (s_surface) {
+        vkDestroySurfaceKHR(s_inst, s_surface, NULL);
+        s_surface = VK_NULL_HANDLE;
+    }
+    s_sc_count = 0;
+    if (!SDL_Vulkan_CreateSurface(s_win, s_inst, &s_surface)) {
+        LOGE("surface rebuild: %s\n", SDL_GetError());
+        s_sc_rebuild = 1;                    /* try again next flip */
+        return;
+    }
+    if (!create_swapchain()) {
+        LOGE("surface rebuild: swapchain failed\n");
+        s_sc_rebuild = 1;
+        return;
+    }
+    s_sc_lost = 0;
+    fprintf(stderr, "  [VK] surface rebuilt after returning to the foreground\n");
+}
+#endif
 
 static int ready(void)
 {
@@ -4581,12 +4621,16 @@ static void vk_flip(void)
     barrier_all();
 
     VT("flip %u: surface %08X drew %d, acquiring\n", s_frame, s ? s->va : 0, s_drew_any);
-    if (!s_headless) {
+    if (!s_headless && !s_sc_lost && s_swapchain) {
         VkResult rr = vkAcquireNextImageKHR(s_dev, s_swapchain, UINT64_MAX, s_f->acquired,
                                             VK_NULL_HANDLE, &idx);
         if (rr == VK_ERROR_OUT_OF_DATE_KHR) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();
+        } else if (rr == VK_ERROR_SURFACE_LOST_KHR || rr == VK_ERROR_DEVICE_LOST) {
+#if defined(__ANDROID__)
+            s_sc_lost = 1;                      /* rebuilt in the foreground */
+#endif
         } else if ((rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) && idx >= s_sc_count) {
             LOGE("acquired swapchain image %u of %u\n", idx, s_sc_count);
         } else if (rr == VK_SUCCESS || rr == VK_SUBOPTIMAL_KHR) {
@@ -4699,8 +4743,24 @@ static void vk_flip(void)
 #if !defined(__SWITCH__)
     if (s_win) {
         SDL_Event e;
-        while (SDL_PollEvent(&e)) { }
+        while (SDL_PollEvent(&e)) {
+#if defined(__ANDROID__)
+            /* Android destroys the window's surface when the app leaves the
+             * foreground and makes a new one when it returns: the old
+             * VkSurfaceKHR is dead ("BufferQueue has been abandoned"). Stop
+             * presenting while away, and rebuild surface and swapchain on
+             * the way back. */
+            if (e.type == SDL_APP_WILLENTERBACKGROUND || e.type == SDL_APP_DIDENTERBACKGROUND)
+                s_sc_lost = 1;
+            else if (e.type == SDL_APP_DIDENTERFOREGROUND)
+                s_sc_rebuild = 1;
+#endif
+        }
     }
+#if defined(__ANDROID__)
+    if (s_sc_rebuild)
+        android_surface_rebuild();
+#endif
 #endif
 }
 
