@@ -45,6 +45,11 @@ set(GAME_SOURCES
 
 if(WIN32)
     add_executable(${PROJECT_NAME} WIN32 ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})
+elseif(ANDROID)
+    # SDLActivity loads libmain.so and calls SDL_main (src/android_main.c).
+    add_library(${PROJECT_NAME} SHARED ${GAME_SOURCES} src/android_main.c
+        ${RECOMP_GEN_SOURCES})
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME main)
 else()
     add_executable(${PROJECT_NAME} ${GAME_SOURCES} ${RECOMP_GEN_SOURCES})
 endif()
@@ -86,8 +91,13 @@ if(WIN32)
     endif()
 else()
     # The generated chunks are huge straight-line functions; -O1 keeps GCC's
-    # memory and time per chunk sane while still allocating registers.
-    set(NFSU2_GEN_OPT "-O1" CACHE STRING "Optimisation for the lifted code")
+    # memory and time per chunk sane while still allocating registers. A
+    # phone's CPU is the bottleneck there, so Android gets -O2.
+    if(ANDROID)
+        set(NFSU2_GEN_OPT "-O2" CACHE STRING "Optimisation for the lifted code")
+    else()
+        set(NFSU2_GEN_OPT "-O1" CACHE STRING "Optimisation for the lifted code")
+    endif()
     # NFSU2_LTO: link-time optimisation of the lifted code and its manual
     # overrides, so lifted callers inline each other and the native leaves
     # (_ftol2, ...). The runtime and renderers are compiled as usual.
@@ -105,4 +115,20 @@ else()
     set_source_files_properties(${RECOMP_GEN_SOURCES} PROPERTIES
         COMPILE_OPTIONS "${NFSU2_GEN_FLAGS}")
     target_link_libraries(${PROJECT_NAME} PRIVATE m)
+endif()
+
+# ── Android (NDK, arm64-v8a) ────────────────────────────────────
+#
+# Built by scripts/android/b3x.sh; the Gradle app in android/ packages
+# libmain.so with libSDL2.so. 16 KB page alignment for Android 15+ kernels.
+if(ANDROID)
+    find_package(SDL2 CONFIG REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE SDL2::SDL2 vulkan log android m)
+    target_link_options(${PROJECT_NAME} PRIVATE
+        "LINKER:-z,max-page-size=16384" "LINKER:--no-undefined")
+    # Clang ignores GCC's __attribute__((optimize("fp-contract=off"))) on the
+    # XMV colour converter; the whole file gets it instead, so its SSE maths
+    # rounds as on the Xbox (no fused multiply-add).
+    set_property(SOURCE src/recomp_manual.c APPEND PROPERTY
+        COMPILE_OPTIONS "-ffp-contract=off")
 endif()

@@ -17,6 +17,11 @@ if(WIN32)
     # Offline smoke test for the pure format layer (no D3D11 device needed).
     add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../../tests/d3d8_smoke
                      ${CMAKE_CURRENT_BINARY_DIR}/d3d8_smoke)
+elseif(ANDROID)
+    # No HLE D3D8 renderer on Android (no desktop GL): the title draws
+    # through the NV2A executor and src/nv2a_vk.
+    add_library(xbox_d3d8 STATIC d3d8_null.c)
+    target_link_libraries(xbox_d3d8 PUBLIC platform)
 else()
     add_library(xbox_d3d8 STATIC
         d3d8_gl.c

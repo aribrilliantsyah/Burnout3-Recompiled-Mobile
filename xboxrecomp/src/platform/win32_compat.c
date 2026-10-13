@@ -887,7 +887,11 @@ void xbox_guest_pin(int interrupt)
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(core, &set);
+#if defined(__ANDROID__)
+        sched_setaffinity(0, sizeof set, &set);   /* bionic: calling thread */
+#else
         pthread_setaffinity_np(pthread_self(), sizeof set, &set);
+#endif
         (void)interrupt;
     }
 #endif
@@ -1157,11 +1161,34 @@ DWORD SuspendThread(HANDLE h)
     return prev;
 }
 
+#if defined(__ANDROID__)
+/* bionic has no pthread_cancel. The target gets a signal whose handler
+ * leaves the thread from wherever it was (as asynchronous cancellation
+ * would); the bookkeeping below then marks it exited as usual. */
+#define W32_TERMINATE_SIGNAL SIGUSR2
+static void w32_terminate_handler(int sig)
+{
+    (void)sig;
+    pthread_exit(NULL);
+}
+static void w32_cancel_thread(pthread_t th)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = w32_terminate_handler;
+    sigemptyset(&sa.sa_mask);
+    sigaction(W32_TERMINATE_SIGNAL, &sa, NULL);
+    pthread_kill(th, W32_TERMINATE_SIGNAL);
+}
+#else
+#define w32_cancel_thread(th) pthread_cancel(th)
+#endif
+
 BOOL TerminateThread(HANDLE h, DWORD exitCode)
 {
     w32_object *o = obj_from(h);
     if (!o || o->kind != K_THREAD) return FALSE;
-    pthread_cancel(o->thread);
+    w32_cancel_thread(o->thread);
     pthread_mutex_lock(&o->lock);
     o->exit_code = exitCode;
     o->exited    = 1;
@@ -1992,6 +2019,10 @@ VOID SecureZeroMemory(PVOID ptr, SIZE_T cnt)
 {
 #if defined(__APPLE__)
     memset_s(ptr, cnt, 0, cnt);
+#elif defined(__ANDROID__)
+    /* bionic has no explicit_bzero; a volatile store loop is not elided. */
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (cnt--) *p++ = 0;
 #else
     explicit_bzero(ptr, cnt);
 #endif

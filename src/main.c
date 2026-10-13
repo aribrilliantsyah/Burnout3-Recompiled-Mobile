@@ -149,7 +149,11 @@ static void install_crash_reporter(void)
     AddVectoredExceptionHandler(1, veh_handler);
 }
 #else
+/* bionic has backtrace() only from API 33; on Android debuggerd writes the
+ * host stack to the tombstone once the signal is re-raised. */
+#if !defined(__ANDROID__)
 #include <execinfo.h>
+#endif
 
 static void crash_signal(int sig, siginfo_t *si, void *uc)
 {
@@ -158,6 +162,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
             sig, si->si_addr,
             (uint32_t)((uintptr_t)si->si_addr - (uintptr_t)g_xbox_mem_offset));
     print_guest_state();
+#if !defined(__ANDROID__)
     {
         /* The host frames name the lifted function (sub_XXXXXXXX) that
          * faulted -- the guest stack alone does not on a worker thread. */
@@ -167,6 +172,7 @@ static void crash_signal(int sig, siginfo_t *si, void *uc)
         fflush(stderr);
         backtrace_symbols_fd(frames, n, 2);
     }
+#endif
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -230,21 +236,24 @@ static void fatal(const char *msg)
 #endif
 }
 
-static int game_main(void);
+int b3x_game_main(void);              /* also android_main.c's entry */
 void xbox_guest_pin(int interrupt);   /* win32_compat.c: the Xbox's one CPU */
 void xbox_gil_enter(void);             /* kernel_bridge.c: the guest lock */
 void xbox_gil_leave(void);
 void xbox_gil_mark_main(void);
 void nfsu2_text_patch_init(void);    /* text_patch.c: Switch button names */
 
+#if !defined(__ANDROID__)
+/* Android: SDLActivity calls SDL_main (src/android_main.c) instead. */
 int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
-    return game_main();
+    return b3x_game_main();
 }
+#endif
 
-static int game_main(void)
+int b3x_game_main(void)
 {
     xbox_guest_pin(0);     /* the boot thread becomes the title's first thread */
     char xbe_path[512];

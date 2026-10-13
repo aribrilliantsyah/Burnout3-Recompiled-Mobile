@@ -1,6 +1,6 @@
 /*
  * d3d8_null.c -- the HLE D3D8 layer on hosts that have neither D3D11 nor a
- * GL loader (the Switch).
+ * GL loader (the Switch, Android).
  *
  * A title that links its own XDK D3D draws through the NV2A pushbuffer
  * executor and never reaches this layer; the video player and the legacy
