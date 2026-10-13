@@ -73,3 +73,17 @@ runs/
 *.log
 .claude/
 .mcp.json
+
+# Android port
+roms/
+.work/
+.superpowers/
+*.apk
+*.aab
+*.crdownload
+android/.gradle/
+android/local.properties
+android/build/
+android/app/build/
+android/app/src/main/jniLibs/
+.cxx/
