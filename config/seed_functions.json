@@ -1,0 +1,50 @@
+[
+ {
+  "start": "0x001D2793",
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x00354EA0",
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x001B3CA0",
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x00362D64",
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x0036365F",
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x0021C830",
+  "note": "PsCreateSystemThreadEx StartContext1 observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x00347A99",
+  "note": "Indirect-call target observed at runtime; decodes as a function body."
+ },
+ {
+  "start": "0x00364C40",
+  "note": "XPP XID class driver AddDevice; reached only through the class-driver table at 0x00362AF4, so no static pass finds it. Unresolved, the pad is enumerated and then never attached."
+ },
+ {
+  "start": "0x00364621",
+  "note": "XPP XID class driver RemoveDevice; reached only through the class-driver table at 0x00362AF4, so no static pass finds it. Unresolved, the pad is enumerated and then never attached."
+ },
+ {
+  "start": "0x0036A200",
+  "note": "XPP class driver RemoveDevice (table 0x362CF8); reached only through the class-driver table at 0x00362AF4, so no static pass finds it. Unresolved, the pad is enumerated and then never attached."
+ },
+ {
+  "start": "0x0036746F",
+  "note": "XPP class driver AddDevice (table 0x362C10); reached only through the class-driver table at 0x00362AF4, so no static pass finds it. Unresolved, the pad is enumerated and then never attached."
+ },
+ {
+  "start": "0x003641DB",
+  "note": "XPP XID input-report completion callback, set as a transfer completion routine; reached only indirectly. Follows a ret 8, not inside any function."
+ }
+]
