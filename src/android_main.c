@@ -172,6 +172,10 @@ int SDL_main(int argc, char **argv)
     /* Android maps no RAM mirrors (as on the Switch): fewer large shared
      * mappings for the low-memory killer to weigh. */
     setenv("RECOMP_NO_MIRRORS", "1", 0);
+    /* The Xbox's own 4:3 (EEPROM video flags without widescreen): the game
+     * renders 4:3 and the present pillarboxes it at that aspect on the
+     * phone's landscape screen, never stretched. */
+    setenv("RECOMP_WIDESCREEN", "0", 0);
 
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 16u * 1024 * 1024);
