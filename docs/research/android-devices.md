@@ -43,3 +43,16 @@ Identified with REA `list_adb_devices` + `inspect_adb_device` and `getprop`:
   dynamic vertex input, Vulkan 1.3)`. Features: no BC textures (ETC2/ASTC
   only), no logicOp, no dualSrcBlend, no shaderClipDistance, no
   fillModeNonSolid. Full list: `adb shell cmd gpu vkjson`.
+
+## Mali-G68 bring-up result (2026-10-14)
+
+- nv2a_vk now has a Vulkan 1.1 path (render passes, descriptor sets,
+  state baked in pipelines), picked automatically when dynamic rendering,
+  push descriptors or dynamic vertex input are missing
+  (`RECOMP_VK_LEGACY=1` forces it on desktop for testing).
+- The Mali swapchain has 9 images (asked for 3); an index past the old
+  8-entry array crashed libGLES_mali in vkCmdPipelineBarrier.
+- FXAA's present pass also faulted in the driver: `RECOMP_VK_FXAA=0`
+  avoids it (FXAA defaults off anyway).
+- Surface rebuilt after home/resume.
+- Result: intro movies and the 'Press START' title render, ~1 core of CPU.

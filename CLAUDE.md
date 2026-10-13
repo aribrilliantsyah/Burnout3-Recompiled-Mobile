@@ -178,6 +178,12 @@ github.com/sp00nznet/burnout3 (software NV2A).
   recomp_manual.c, so the file gets -ffp-contract=off on Android.
   libmain.so LOAD segments are 16 KB aligned; NEEDED is only libm, SDL2,
   vulkan, log, android, dl, c.
+- **Mali-G68 (Vulkan 1.1, driver r32p1) renders (2026-10-14):** nv2a_vk
+  falls back to render passes + descriptor sets + baked pipeline state
+  when dynamic rendering / push descriptors / dynamic vertex input are
+  missing (`RECOMP_VK_LEGACY=1` forces it). Swapchain image count is read
+  from the driver (Mali gives 9). Surface rebuilt on foreground return.
+  Intro and title render on the Infinix X6815D.
 
 ## Status of the Switch/Linux port this started from (2026-10-10)
 
