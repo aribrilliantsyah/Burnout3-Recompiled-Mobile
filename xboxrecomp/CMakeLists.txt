@@ -39,22 +39,6 @@ add_subdirectory(src/d3d)
 
 option(XBOXRECOMP_VULKAN "Build the Vulkan renderer (nv2a_vk) instead of OpenGL" OFF)
 
-# The Vulkan build on the Switch links mesa-switch's NVK. switch-sdl2 brings
-# switch-mesa's EGL/GL, a second copy of Mesa's utilities: strip them from
-# SDL2::SDL2 here, before the subdirectories find it (SDL is only the audio
-# output there; its unused video driver's EGL calls are stubbed in nv2a_vk).
-if(NINTENDO_SWITCH AND XBOXRECOMP_VULKAN)
-    find_package(SDL2 REQUIRED)
-    get_target_property(_sdl2_real SDL2::SDL2 ALIASED_TARGET)
-    if(NOT _sdl2_real)
-        set(_sdl2_real SDL2::SDL2)
-    endif()
-    get_target_property(_sdl2_libs ${_sdl2_real} INTERFACE_LINK_LIBRARIES)
-    list(FILTER _sdl2_libs EXCLUDE REGEX "EGL|GLES|glapi|drm_nouveau|^GL$|OpenGL")
-    set_property(TARGET ${_sdl2_real} PROPERTY INTERFACE_LINK_LIBRARIES "${_sdl2_libs}")
-    message(STATUS "SDL2 link interface (Vulkan build): ${_sdl2_libs}")
-endif()
-
 # Audio: DirectSound → software mixer compatibility
 add_subdirectory(src/audio)
 

@@ -3,10 +3,6 @@
 add_library(xbox_input STATIC
     xinput_device.c
 )
-if(NINTENDO_SWITCH)
-    # The Switch's controllers, read through libnx and mapped by position.
-    target_sources(xbox_input PRIVATE xinput_nx.c)
-endif()
 
 target_include_directories(xbox_input PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

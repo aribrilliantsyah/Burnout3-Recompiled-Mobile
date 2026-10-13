@@ -279,40 +279,10 @@ void xbox_InputInit(void)
     open_controllers();
 }
 
-#if defined(__SWITCH__)
-#include "xinput_nx.h"
-#endif
-
 DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
 {
     if (dwPort >= XBOX_MAX_CONTROLLERS || !pState)
         return ERROR_DEVICE_NOT_CONNECTED;
-
-#if defined(__SWITCH__)
-    /* The console's own controllers, mapped by position (xinput_nx.c). */
-    {
-        uint16_t dig;
-        uint8_t ana[8];
-        int16_t th[4];
-        int i;
-
-        if (!xbox_nx_pad_read(dwPort, &dig, ana, th)) {
-            g_controller_connected[dwPort] = FALSE;
-            return ERROR_DEVICE_NOT_CONNECTED;
-        }
-        g_controller_connected[dwPort] = TRUE;
-        memset(pState, 0, sizeof(XBOX_INPUT_STATE));
-        pState->dwPacketNumber = ++g_packet[dwPort];
-        pState->Gamepad.wButtons = dig;
-        for (i = 0; i < 8; i++)
-            pState->Gamepad.bAnalogButtons[i] = ana[i];
-        pState->Gamepad.sThumbLX = th[0];
-        pState->Gamepad.sThumbLY = th[1];
-        pState->Gamepad.sThumbRX = th[2];
-        pState->Gamepad.sThumbRY = th[3];
-        return ERROR_SUCCESS;
-    }
-#endif
 
     SDL_GameController *c = g_pads[dwPort];
     if (!c || !SDL_GameControllerGetAttached(c)) {
@@ -373,12 +343,6 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
     if (dwPort >= XBOX_MAX_CONTROLLERS || !pVibration)
         return ERROR_DEVICE_NOT_CONNECTED;
 
-#if defined(__SWITCH__)
-    /* The console's own controllers (xinput_nx.c), not SDL's. */
-    xbox_nx_pad_rumble(dwPort, pVibration->wLeftMotorSpeed,
-                       pVibration->wRightMotorSpeed);
-    return ERROR_SUCCESS;
-#else
     SDL_GameController *c = g_pads[dwPort];
     if (!c) return ERROR_DEVICE_NOT_CONNECTED;
 
@@ -387,7 +351,6 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
     SDL_GameControllerRumble(c, pVibration->wLeftMotorSpeed,
                              pVibration->wRightMotorSpeed, 1000);
     return ERROR_SUCCESS;
-#endif
 }
 
 BOOL xbox_InputIsConnected(DWORD dwPort)

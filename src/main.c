@@ -26,12 +26,7 @@
 
 #include <xbox/xboxrecomp.h>
 
-#ifdef __SWITCH__
-/* libnx lives in switch_nx.c: <switch.h> and the Win32 vocabulary collide. */
-void switch_boot(void);
-void switch_shutdown(void);
-void switch_error_dialog(const char *msg, const char *details);
-#elif !defined(_WIN32)
+#if !defined(_WIN32)
 int SDL_ShowSimpleMessageBox(uint32_t flags, const char *title, const char *message,
                              void *window);
 #endif
@@ -153,9 +148,6 @@ static void install_crash_reporter(void)
     SymInitialize(GetCurrentProcess(), NULL, TRUE);
     AddVectoredExceptionHandler(1, veh_handler);
 }
-#elif defined(__SWITCH__)
-/* The CPU exception handler is in switch_nx.c; it calls print_guest_state. */
-static void install_crash_reporter(void) {}
 #else
 #include <execinfo.h>
 
@@ -233,8 +225,6 @@ static void fatal(const char *msg)
     fprintf(stderr, "[FATAL] %s\n", msg);
 #if defined(_WIN32)
     MessageBoxA(NULL, msg, "Burnout 3 recomp", MB_ICONERROR);
-#elif defined(__SWITCH__)
-    switch_error_dialog(msg, NULL);
 #else
     SDL_ShowSimpleMessageBox(0x10, "Burnout 3 recomp", msg, NULL);
 #endif
@@ -247,48 +237,12 @@ void xbox_gil_leave(void);
 void xbox_gil_mark_main(void);
 void nfsu2_text_patch_init(void);    /* text_patch.c: Switch button names */
 
-#ifdef __SWITCH__
-#include <pthread.h>
-/* The first guest thread runs inline on whichever host thread boots the
- * title, and Horizon's main thread stack is small for recompiled code; boot
- * on a thread with a stack sized like a desktop main thread instead. */
-void xbox_nx_spread_thread(void);   /* win32_compat.c: off core 0, all cores allowed */
-void xbox_nx_track_thread(void *entry);   /* win32_compat.c: Switch [perf] report */
-
-static void *game_thread(void *arg)
-{
-    xbox_nx_spread_thread();
-    xbox_nx_track_thread(NULL);          /* "game:" in the [perf] report */
-    *(int *)arg = game_main();
-    return NULL;
-}
-
-int main(int argc, char **argv)
-{
-    pthread_attr_t attr;
-    pthread_t th;
-    int rc = 1;
-
-    (void)argc;
-    (void)argv;
-    switch_boot();
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, 16u * 1024 * 1024);
-    if (pthread_create(&th, &attr, game_thread, &rc) == 0)
-        pthread_join(th, NULL);
-    else
-        fprintf(stderr, "[FATAL] cannot start the game thread\n");
-    switch_shutdown();
-    return rc;
-}
-#else
 int main(int argc, char **argv)
 {
     (void)argc;
     (void)argv;
     return game_main();
 }
-#endif
 
 static int game_main(void)
 {
