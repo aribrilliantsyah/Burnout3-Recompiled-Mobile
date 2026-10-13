@@ -135,11 +135,18 @@ cmd_push_game() {
         if grep -qxF "$size ./$rel" "$list"; then
             skipped=$((skipped + 1)); continue
         fi
-        ADB shell mkdir -p "$DEVICE_FILES/game/$(dirname "$rel")" >/dev/null
-        ADB push "$f" "$DEVICE_FILES/game/$rel" >/dev/null
+        # </dev/null: adb reads stdin, which here is the find list.
+        ADB shell mkdir -p "$DEVICE_FILES/game/$(dirname "$rel")" </dev/null >/dev/null
+        ADB push "$f" "$DEVICE_FILES/game/$rel" </dev/null >/dev/null
         n=$((n + 1))
-    done < <(find "$src" -type f ! -name '*_analysis.json' -print0)
+    done < <(find "$src" \( -path "$src/UDATA" -o -path "$src/TDATA" \) -prune -o \
+                 -type f ! -name '*_analysis.json' -print0)
     rm -f "$list"
+    # adb pushes as the shell user, mode 644: the app (same ext_data_rw
+    # group) could read but not write, so the title failed to create its
+    # save metadata (STATUS_ACCESS_DENIED) and quit. Group-writable fixes it.
+    # UDATA/TDATA (saves made by a desktop run) stay on the host.
+    ADB shell chmod -R g+w "$DEVICE_FILES/game" </dev/null
     say "push-game: $n pushed, $skipped already there"
 }
 
