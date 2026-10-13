@@ -87,3 +87,11 @@ android/build/
 android/app/build/
 android/app/src/main/jniLibs/
 .cxx/
+
+# Renderer caches written to the working directory
+progcache.bin
+vkpipecache.bin
+vkpipes.bin
+vkspirv.bin
+b3x_options.txt
+b3x_env.txt
