@@ -30,6 +30,29 @@
 
 int b3x_game_main(void);   /* main.c */
 
+#include <jni.h>
+
+/* ------------------------------------------------------------------ */
+/* Java side (B3xActivity, the touch overlay)                         */
+
+extern void xbox_InputSetVirtual(int buttons, int face, int lt, int rt, int lx, int ly);
+extern volatile float nv2a_vk_fps;
+
+JNIEXPORT void JNICALL
+Java_com_ryuna_b3x_B3xActivity_nativeSetPad(JNIEnv *env, jclass cls, jint buttons, jint face,
+                                            jint lt, jint rt, jint lx, jint ly)
+{
+    (void)env; (void)cls;
+    xbox_InputSetVirtual(buttons, face, lt, rt, lx, ly);
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_ryuna_b3x_B3xActivity_nativeGetFps(JNIEnv *env, jclass cls)
+{
+    (void)env; (void)cls;
+    return nv2a_vk_fps;
+}
+
 /* ------------------------------------------------------------------ */
 /* stdout/stderr -> logcat                                            */
 
@@ -81,11 +104,11 @@ static void redirect_stdio_to_logcat(void)
 /* ------------------------------------------------------------------ */
 /* b3x_env.txt                                                        */
 
-static void load_env_file(const char *dir)
+static void load_env_file(const char *dir, const char *name)
 {
     char path[512], line[512];
     FILE *f;
-    snprintf(path, sizeof(path), "%s/b3x_env.txt", dir);
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
     f = fopen(path, "r");
     if (!f)
         return;
@@ -125,6 +148,9 @@ int SDL_main(int argc, char **argv)
     (void)argc;
     (void)argv;
     redirect_stdio_to_logcat();
+    /* The renderer's window is resizable; without this SDLActivity asks
+     * for FULL_USER and the game turns to portrait with the phone. */
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
 
     ext = SDL_AndroidGetExternalStoragePath();
     if (!ext) {
@@ -137,7 +163,9 @@ int SDL_main(int argc, char **argv)
     printf("[android] files: %s\n", ext);
     if (chdir(ext) != 0)
         printf("[android] chdir %s failed\n", ext);
-    load_env_file(ext);
+    /* Launcher settings first, then the developer's b3x_env.txt over them. */
+    load_env_file(ext, "b3x_launcher.txt");
+    load_env_file(ext, "b3x_env.txt");
 
     snprintf(game_dir, sizeof(game_dir), "%s/game", ext);
     setenv("NFSU2_GAME_DIR", game_dir, 0);

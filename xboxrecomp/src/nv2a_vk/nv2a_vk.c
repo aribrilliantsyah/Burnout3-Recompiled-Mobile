@@ -520,6 +520,7 @@ static int      s_square, s_square_env;
  * on/off (at the next flip, like nv2a_vk_scale_pct). The env switches
  * (RECOMP_VK_FXAA=0, RECOMP_VK_SQUARE=0, ...) still force them off. */
 volatile int nv2a_vk_fxaa = 1;
+volatile float nv2a_vk_fps;              /* frames a second, updated every 0.5 s */
 volatile int nv2a_vk_aniso = 16;
 volatile int nv2a_vk_square = 1;
 static uint32_t s_max_size = 4096;
@@ -2552,7 +2553,17 @@ static int create_swapchain(void)
     ci.imageExtent = s_sc_extent;
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    /* Android reports the panel's rotation as currentTransform (90 when a
+     * portrait-native phone shows landscape). Taking it as preTransform asks
+     * us to draw rotated, which nothing here does: the picture came out
+     * sideways. Identity lets the compositor rotate. currentExtent is
+     * already the window's (landscape) size here (Mali: 2460x1080 with
+     * ROTATE_90): keep it as is; swapping it squashed the picture into a
+     * band and made every present SUBOPTIMAL. */
     ci.preTransform = caps.currentTransform;
+    if (caps.currentTransform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+        && (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR))
+        ci.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     ci.presentMode = mode;
     ci.clipped = VK_TRUE;
@@ -2592,8 +2603,10 @@ static int create_swapchain(void)
         if (vkCreateImageView(s_dev, &vi, NULL, &s_sc_views[i]) != VK_SUCCESS)
             s_sc_views[i] = VK_NULL_HANDLE;     /* that image falls back to the blit */
     }
-    fprintf(stderr, "  [VK] swapchain %ux%u, %u images, format %d, present mode %d\n",
-            s_sc_extent.width, s_sc_extent.height, s_sc_count, s_sc_format, mode);
+    fprintf(stderr, "  [VK] swapchain %ux%u, %u images, format %d, present mode %d, transform 0x%x (surface 0x%x, %ux%u)\n",
+            s_sc_extent.width, s_sc_extent.height, s_sc_count, s_sc_format, mode,
+            (unsigned)ci.preTransform, (unsigned)caps.currentTransform,
+            caps.currentExtent.width, caps.currentExtent.height);
     return 1;
 }
 
@@ -4494,6 +4507,21 @@ static void vk_flip(void)
         return;
     pend_flush();
     s_frame++;
+    {
+        /* Frames a second over the last half second, for an overlay. */
+        static struct timespec t0;
+        static uint32_t f0;
+        struct timespec t;
+        double dt;
+        clock_gettime(CLOCK_MONOTONIC, &t);
+        if (!t0.tv_sec) { t0 = t; f0 = s_frame; }
+        dt = (double)(t.tv_sec - t0.tv_sec) + (t.tv_nsec - t0.tv_nsec) / 1e9;
+        if (dt >= 0.5) {
+            nv2a_vk_fps = (float)((s_frame - f0) / dt);
+            t0 = t;
+            f0 = s_frame;
+        }
+    }
     if (s_inst_alt)
         s_inst_on = s_frame & 1;
     {
@@ -4722,6 +4750,16 @@ static void vk_flip(void)
         pi.pImageIndices = &idx;
         VT("flip %u: vkQueuePresentKHR\n", s_frame);
         pr = vkQueuePresentKHR(s_queue, &pi);
+        if (pr == VK_SUBOPTIMAL_KHR) {
+            /* Android says SUBOPTIMAL on every present when the swapchain is
+             * not pre-rotated (we let the compositor rotate): remake it only
+             * when the window's size really changed. */
+            VkSurfaceCapabilitiesKHR c2;
+            if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(s_pd, s_surface, &c2) == VK_SUCCESS
+                && c2.currentExtent.width == s_sc_extent.width
+                && c2.currentExtent.height == s_sc_extent.height)
+                pr = VK_SUCCESS;
+        }
         if (pr == VK_ERROR_OUT_OF_DATE_KHR || pr == VK_SUBOPTIMAL_KHR) {
             vkDeviceWaitIdle(s_dev);
             create_swapchain();

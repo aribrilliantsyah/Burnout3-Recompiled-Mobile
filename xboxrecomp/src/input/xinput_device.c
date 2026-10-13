@@ -257,6 +257,43 @@ static SDL_GameController *g_pads[XBOX_MAX_CONTROLLERS];
 static BOOL  g_controller_connected[XBOX_MAX_CONTROLLERS];
 static DWORD g_packet[XBOX_MAX_CONTROLLERS];
 
+/* ---- virtual pad (Android touch overlay), always port 0 --------------
+ * Written by the UI thread through xbox_InputSetVirtual, read by the game
+ * thread; each field is a plain int, a torn read only mixes two frames. */
+static volatile int  g_virt_on;
+static volatile int  g_virt_buttons;        /* XBOX_GAMEPAD_* digital bits */
+static volatile int  g_virt_face;           /* bit n = analog button n (A,B,X,Y,BLACK,WHITE) */
+static volatile int  g_virt_lt, g_virt_rt;  /* 0..255 */
+static volatile int  g_virt_lx, g_virt_ly;  /* -32768..32767, Y up */
+
+void xbox_InputSetVirtual(int buttons, int face, int lt, int rt, int lx, int ly)
+{
+    g_virt_buttons = buttons;
+    g_virt_face = face;
+    g_virt_lt = lt;
+    g_virt_rt = rt;
+    g_virt_lx = lx;
+    g_virt_ly = ly;
+    g_virt_on = 1;
+}
+
+static void virt_merge(XBOX_INPUT_STATE *s)
+{
+    int i, f = g_virt_face;
+    s->Gamepad.wButtons |= (WORD)g_virt_buttons;
+    for (i = 0; i < 6; i++)
+        if (f & (1 << i))
+            s->Gamepad.bAnalogButtons[i] = 255;
+    if (g_virt_lt > s->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER])
+        s->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] = (BYTE)g_virt_lt;
+    if (g_virt_rt > s->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER])
+        s->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] = (BYTE)g_virt_rt;
+    if (g_virt_lx || g_virt_ly) {
+        s->Gamepad.sThumbLX = (SHORT)g_virt_lx;
+        s->Gamepad.sThumbLY = (SHORT)g_virt_ly;
+    }
+}
+
 /* Open up to XBOX_MAX_CONTROLLERS attached game controllers. */
 static void open_controllers(void)
 {
@@ -285,7 +322,28 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
         return ERROR_DEVICE_NOT_CONNECTED;
 
     SDL_GameController *c = g_pads[dwPort];
+    if (!c) {
+        /* A pad paired after boot (Bluetooth): look again once a second. */
+        static Uint32 last_scan;
+        Uint32 now = SDL_GetTicks();
+        if (now - last_scan > 1000) {
+            last_scan = now;
+            open_controllers();
+            c = g_pads[dwPort];
+        }
+    }
     if (!c || !SDL_GameControllerGetAttached(c)) {
+        if (c) {
+            SDL_GameControllerClose(c);
+            g_pads[dwPort] = NULL;
+        }
+        if (dwPort == 0 && g_virt_on) {
+            g_controller_connected[0] = TRUE;
+            memset(pState, 0, sizeof(XBOX_INPUT_STATE));
+            pState->dwPacketNumber = ++g_packet[0];
+            virt_merge(pState);
+            return ERROR_SUCCESS;
+        }
         g_controller_connected[dwPort] = FALSE;
         return ERROR_DEVICE_NOT_CONNECTED;
     }
@@ -334,6 +392,8 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
     pState->Gamepad.sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
     pState->Gamepad.sThumbRY =
         (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
+    if (dwPort == 0 && g_virt_on)
+        virt_merge(pState);
 
     return ERROR_SUCCESS;
 }
@@ -356,7 +416,7 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
 BOOL xbox_InputIsConnected(DWORD dwPort)
 {
     if (dwPort >= XBOX_MAX_CONTROLLERS) return FALSE;
-    return g_controller_connected[dwPort];
+    return g_controller_connected[dwPort] || (dwPort == 0 && g_virt_on);
 }
 
 DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILITIES *pCaps)
@@ -364,7 +424,7 @@ DWORD xbox_InputGetCapabilities(DWORD dwPort, DWORD dwFlags, XBOX_INPUT_CAPABILI
     (void)dwFlags;
     if (dwPort >= XBOX_MAX_CONTROLLERS || !pCaps)
         return ERROR_DEVICE_NOT_CONNECTED;
-    if (!g_pads[dwPort])
+    if (!g_pads[dwPort] && !(dwPort == 0 && g_virt_on))
         return ERROR_DEVICE_NOT_CONNECTED;
 
     memset(pCaps, 0, sizeof(XBOX_INPUT_CAPABILITIES));
