@@ -17,6 +17,8 @@ All notable changes to this project are recorded here. The format follows
 - Touch pad with two layouts (Drive, Full Xbox controller), a layout
   editor, tilt steering, haptics; controller remapping; rumble to the
   phone's vibrator.
+- Install from ISO: the launcher checks an Xbox disc image (XDVDFS, title
+  4541005B, free space) and extracts it into the app's folder once.
 - In-game ☰ menu: resume, edit touch layout, exit to the launcher.
 - Debug log file (`b3x_log.txt`) with fps and guest snapshots.
 

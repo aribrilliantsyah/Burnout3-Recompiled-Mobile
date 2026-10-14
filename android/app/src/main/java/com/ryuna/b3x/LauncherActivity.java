@@ -18,6 +18,7 @@ import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.View;
 import android.widget.EditText;
+import java.io.File;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -30,13 +31,16 @@ import android.widget.Toast;
  * Graphics, Sound, Advanced (collapsed). Landscape: two columns of cards.
  */
 public class LauncherActivity extends Activity {
-    private static final int REQ_TREE = 1;
+    private static final int REQ_TREE = 1, REQ_ISO = 2;
 
     private SharedPreferences mPrefs;
     private UiKit ui;
     private EditText mDir;
     private TextView mDirStatus, mPadStatus;
     private View mPlay;
+    private android.widget.Button mIsoBtn;
+    private TextView mPlayHint;
+    private volatile boolean mCancelExtract;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -76,7 +80,7 @@ public class LauncherActivity extends Activity {
         ver.setPadding(0, 0, 0, ui.dp(4));
         head.addView(ver);
         page.addView(head);
-        page.addView(ui.summary("You need your own copy of the game, extracted from your disc. This app contains no game data."));
+        page.addView(ui.summary("You need your own copy of the game (the Xbox disc image, .iso). This app contains no game data."));
         page.addView(ui.gap(10));
 
         LinearLayout cols = new LinearLayout(this);
@@ -104,6 +108,14 @@ public class LauncherActivity extends Activity {
     private LinearLayout gameCard() {
         LinearLayout c = ui.card();
         c.addView(ui.section("GAME"));
+        // No game yet: the ISO is the way in (extracted once into the app's
+        // folder). With a game there, PLAY.
+        mIsoBtn = ui.primary("INSTALL FROM ISO…", v -> pickIso());
+        c.addView(mIsoBtn, new LinearLayout.LayoutParams(-1, -2));
+        mPlayHint = ui.summary("Pick your Burnout 3 disc image (.iso, Xbox NTSC-U). It is extracted once "
+                + "into the app's folder (~2.4 GB); afterwards the .iso can be deleted.");
+        mPlayHint.setPadding(0, ui.dp(4), 0, ui.dp(10));
+        c.addView(mPlayHint);
         c.addView(ui.text("Game folder (contains default.xbe)", 13, UiKit.DIM));
         mDir = new EditText(this);
         mDir.setSingleLine(true);
@@ -304,6 +316,10 @@ public class LauncherActivity extends Activity {
             mDirStatus.setTextColor(UiKit.ACCENT);
         }
         mPlay.setAlpha(err == null ? 1f : .5f);
+        boolean have = err == null;
+        mPlay.setVisibility(have ? View.VISIBLE : View.GONE);
+        mIsoBtn.setVisibility(have ? View.GONE : View.VISIBLE);
+        mPlayHint.setVisibility(have ? View.GONE : View.VISIBLE);
     }
 
     private void pickFolder() {
@@ -325,9 +341,185 @@ public class LauncherActivity extends Activity {
         }
     }
 
+    // ------------------------------------------------------------- ISO install
+
+    private void pickIso() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT)
+            .addCategory(Intent.CATEGORY_OPENABLE)
+            .setType("*/*");
+        try {
+            startActivityForResult(i, REQ_ISO);
+        } catch (Exception e) {
+            Toast.makeText(this, "No file picker on this phone.", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static String fmtMB(long b) { return String.format(java.util.Locale.US, "%,d MB", b >> 20); }
+
+    /** Checks the image, then extracts it into the app's game folder:
+     *  game.tmp first, renamed over game at the end (saves kept). */
+    private void installIso(Uri uri) {
+        android.os.ParcelFileDescriptor pfd;
+        try {
+            pfd = getContentResolver().openFileDescriptor(uri, "r");
+        } catch (Exception e) {
+            alert("Cannot open the file", String.valueOf(e.getMessage()));
+            return;
+        }
+        if (pfd == null) return;
+        java.io.FileInputStream in = new java.io.FileInputStream(pfd.getFileDescriptor());
+        java.nio.channels.FileChannel ch = in.getChannel();
+        XisoExtractor x;
+        int title;
+        try {
+            x = new XisoExtractor(ch);
+            title = x.titleId();
+        } catch (Exception e) {
+            closeQuietly(pfd);
+            alert("Not a usable disc image", e.getMessage()
+                    + "\n\nPick the .iso of the Xbox disc (an \"XISO\" image, ~2.4 GB).");
+            return;
+        }
+        if (x.find("default.xbe") == null || title != XisoExtractor.TITLE_ID) {
+            closeQuietly(pfd);
+            alert("Wrong game", title == 0 ? "This image has no default.xbe."
+                    : String.format("This image is title %08X. b3x needs Burnout 3: Takedown, "
+                    + "Xbox NTSC-U (title 4541005B).", title));
+            return;
+        }
+        File root = Settings.filesDir(this);
+        File game = new File(Settings.defaultGameDir(this)), tmp = new File(root, "game.tmp");
+        deleteTree(tmp);
+        long free = root.getUsableSpace(), need = x.totalBytes + (64L << 20);
+        if (free < need) {
+            closeQuietly(pfd);
+            alert("Not enough space", "Extracting needs " + fmtMB(need) + "; " + fmtMB(free)
+                    + " is free. Free some space and try again.");
+            return;
+        }
+
+        // progress dialog
+        LinearLayout box = ui.column();
+        box.setPadding(ui.dp(20), ui.dp(12), ui.dp(20), ui.dp(4));
+        android.widget.ProgressBar bar = new android.widget.ProgressBar(this, null,
+                android.R.attr.progressBarStyleHorizontal);
+        bar.setMax(1000);
+        TextView line = ui.summary("");
+        TextView file = ui.summary("");
+        file.setSingleLine(true);
+        file.setEllipsize(android.text.TextUtils.TruncateAt.START);
+        box.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+        box.addView(line);
+        box.addView(file);
+        mCancelExtract = false;
+        android.app.AlertDialog dlg = new android.app.AlertDialog.Builder(this,
+                android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Installing Burnout 3")
+            .setView(box)
+            .setCancelable(false)
+            .setNegativeButton("Cancel", null)
+            .create();
+        dlg.setOnShowListener(d -> dlg.getButton(android.app.AlertDialog.BUTTON_NEGATIVE)
+                .setOnClickListener(v -> { mCancelExtract = true; line.setText("Cancelling…"); }));
+        dlg.show();
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        final long[] last = { 0 };
+        final long t0 = android.os.SystemClock.elapsedRealtime();
+        new Thread(() -> {
+            String error = null;
+            boolean cancelled = false;
+            try {
+                x.extract(tmp, (done, total, name) -> {
+                    long now = android.os.SystemClock.elapsedRealtime();
+                    if (now - last[0] >= 200 || done == total) {
+                        last[0] = now;
+                        double secs = Math.max(.001, (now - t0) / 1000.0);
+                        String txt = fmtMB(done) + " / " + fmtMB(total) + "  ·  "
+                                + String.format(java.util.Locale.US, "%.0f MB/s", (done >> 20) / secs);
+                        runOnUiThread(() -> {
+                            bar.setProgress((int) (done * 1000 / Math.max(1, total)));
+                            if (!mCancelExtract) line.setText(txt);
+                            file.setText(name);
+                        });
+                    }
+                    return !mCancelExtract;
+                });
+                // keep the saves of an earlier install
+                File oldU = new File(game, "UDATA");
+                if (oldU.isDirectory()) {
+                    File newU = new File(tmp, "UDATA");
+                    deleteTree(newU);
+                    if (!oldU.renameTo(newU)) throw new java.io.IOException("Cannot keep the saves (UDATA)");
+                }
+                deleteTree(game);
+                if (!tmp.renameTo(game)) throw new java.io.IOException("Cannot rename game.tmp to game");
+            } catch (XisoExtractor.Cancelled c) {
+                cancelled = true;
+            } catch (Exception e) {
+                error = e.getMessage();
+            } finally {
+                closeQuietly(pfd);
+                if (error != null || cancelled) deleteTree(tmp);
+            }
+            final String err = error;
+            final boolean canc = cancelled;
+            final long secs = (android.os.SystemClock.elapsedRealtime() - t0) / 1000;
+            runOnUiThread(() -> {
+                getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                dlg.dismiss();
+                if (canc) {
+                    Toast.makeText(this, "Install cancelled.", Toast.LENGTH_SHORT).show();
+                } else if (err != null) {
+                    alert("Install failed", err);
+                } else {
+                    mDir.setText(game.getAbsolutePath());
+                    saveDir(game.getAbsolutePath());
+                    offerDeleteIso(uri, x.files.size(), secs);
+                }
+            });
+        }, "iso-extract").start();
+    }
+
+    private void offerDeleteIso(Uri uri, int files, long secs) {
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Game installed")
+            .setMessage(files + " files extracted in " + secs + " s. The .iso is no longer needed; "
+                    + "delete it to get its space back?")
+            .setPositiveButton("Delete .iso", (d, w) -> {
+                boolean ok;
+                try { ok = DocumentsContract.deleteDocument(getContentResolver(), uri); }
+                catch (Exception e) { ok = false; }
+                Toast.makeText(this, ok ? "The .iso was deleted." : "Could not delete it; remove it with a file manager.",
+                        Toast.LENGTH_LONG).show();
+            })
+            .setNegativeButton("Keep it", null)
+            .show();
+    }
+
+    private void alert(String title, String msg) {
+        new android.app.AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(title).setMessage(msg).setPositiveButton("OK", null).show();
+    }
+
+    private static void closeQuietly(java.io.Closeable c) {
+        try { c.close(); } catch (Exception ignored) { }
+    }
+
+    private static void deleteTree(File f) {
+        if (f == null || !f.exists()) return;
+        File[] kids = f.isDirectory() ? f.listFiles() : null;
+        if (kids != null) for (File k : kids) deleteTree(k);
+        f.delete();
+    }
+
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
+        if (req == REQ_ISO) {
+            if (res == RESULT_OK && data != null && data.getData() != null) installIso(data.getData());
+            return;
+        }
         if (req != REQ_TREE || res != RESULT_OK || data == null || data.getData() == null) return;
         String path = treeToPath(data.getData());
         if (path == null) {

@@ -59,18 +59,21 @@ internal resolution 2x, the Drive touch layout.
 
 ## 🚀 Quick start
 
-1. **Extract your disc** on a PC (xboxrecomp's `xiso` tool, or any XISO
-   extractor). You need the folder with `default.xbe`, `Data/`, `Graphics/`
-   and the rest (~2.4 GB).
-2. **Copy it to the phone**, either:
-   - into the app's folder `Android/data/com.ryuna.b3x/files/game/` (no
-     permission needed), or
-   - anywhere else, e.g. `Download/Burnout3/`; the launcher then asks for
-     *All files access*.
-3. **Install the APK**, open **b3x**, pick the folder (✓ *default.xbe
-   found*), press **PLAY**.
+1. **Get the disc image** of your own Xbox disc: Burnout 3: Takedown, NTSC-U
+   (`.iso`, an "XISO" image of ~2.4 GB). Copy it to the phone, e.g.
+   `Download/`.
+2. **Install the APK** and open **b3x**.
+3. **First run:** tap **INSTALL FROM ISO…** and pick the `.iso`. The launcher
+   checks it (XDVDFS, title `4541005B`, free space), extracts it once into the
+   app's folder with a progress bar (about 1-3 min), then offers to delete
+   the `.iso`.
+4. **PLAY.** From then on the launcher goes straight to PLAY; the ISO is not
+   needed again.
 
-Saves go in the game folder's `UDATA/`, as on the Xbox hard disk.
+Already have the disc extracted? Put the folder (with `default.xbe`) in
+`Android/data/com.ryuna.b3x/files/game/`, or anywhere and pick it with
+*Choose folder…* (asks for *All files access*). Saves live in the game
+folder's `UDATA/` and survive a reinstall from ISO.
 
 ## ✨ Features
 
@@ -97,6 +100,8 @@ Saves go in the game folder's `UDATA/`, as on the Xbox hard disk.
   or to the phone's vibrator without one.
 - **In-game menu (☰)** — resume, edit the touch layout, or exit to the
   launcher.
+- **Install from ISO** — pick the disc image once; it is checked and
+  extracted in the launcher, no PC tools needed.
 - **Debug log** — `b3x_log.txt` with fps and guest thread snapshots, for
   hang and crash reports.
 
