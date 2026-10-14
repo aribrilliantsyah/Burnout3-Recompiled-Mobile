@@ -1,23 +1,21 @@
 # Roadmap
 
-## Now: bootstrap (docs/superpowers/plans/2026-10-13-android-port-bootstrap.md)
+## Done (0.0.1)
 
-- Lift the XBE from the user's disc, Linux baseline run.
-- Android dependencies (SDL2, glslang) built with the NDK.
-- Runtime and lifted game as `libmain.so` on bionic (16 KB pages included).
-- Gradle app `com.ryuna.b3x` on SDLActivity.
-- `scripts/android/b3x.sh`: build, install, run, log on the phone.
-- Title screen on Snapdragon 7s Gen 2 and Dimensity 920.
+- XBE lifted to C, built as `libmain.so` for arm64 Android (NDK r28c).
+- Vulkan renderer with a Vulkan 1.1 path for older drivers (Mali r32p1).
+- Launcher: install from ISO or pick an extracted folder; display, graphics,
+  sound, touch and controller settings.
+- Touch pad (Drive and Full layouts) with an editor; controller remapping;
+  rumble.
+- Playable on a Dimensity 920 class phone (Mali-G68) at ~60 fps.
 
 ## Next
 
-- **First-run menu**: pick the ISO or the extracted folder (Storage Access
-  Framework), check `default.xbe` (title ID `0x4541005B`), extract into app
-  storage. The APK never carries game data.
-- **Touch controls** overlay (gamepads work through SDL first).
-- **Performance** on the target phones: thread placement on the big cores,
-  `-O2`/LTO for the lifted code, pipeline cache.
-- **Driver issues** on Mali (Dimensity 920) as they show up.
+- Test on Snapdragon 7s Gen 2 (Adreno 710, Vulkan 1.3 path).
+- Confirm the random-freeze fix over long sessions.
+- Physical controllers, tilt steering, FXAA on Mali.
+- Release builds: signed APK, stripped `libmain.so`.
 
 ## Out of scope
 

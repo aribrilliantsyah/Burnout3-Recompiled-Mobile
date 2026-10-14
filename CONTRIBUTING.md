@@ -9,7 +9,7 @@ yours is on:
 |---|---|
 | wrong lifted code, a missing x86/x87/SSE instruction, a switch table the disassembler misreads | xboxrecomp `tools/recomp`, `tools/disasm` |
 | the GPU draws something wrong, a kernel call misbehaves, pads, audio, movies | xboxrecomp `src/` |
-| an address only Burnout 3 has (a fence, a doorbell, a seed function), boot defaults | here: `src/game/main.c`, `config/seed_functions.json` |
+| an address only Burnout 3 has (a fence, a doorbell, a seed function), boot defaults | here: `src/main.c`, `src/recomp_manual.c`, `config/seed_functions.json` |
 
 A toolkit change is a PR against xboxrecomp that explains the bug in general
 terms. The Burnout 3 commit that needs it names the PR (`needs xboxrecomp#NN`).
@@ -20,14 +20,14 @@ Follow the README's *Getting Started*, either route. You need your own disc
 image. No dumps, extracted files or generated source go in issues or PRs: attach
 logs and screenshots instead.
 
-`docs/running.md` covers the headless tools: scripted pads, frame dumps,
-recording. Run any change against at least one race and one menu path before
+The README's *Configuration* section lists the debugging variables (frame
+dumps, frame traces, APU voices). Run any change against at least one race and one menu path before
 you open a PR, and say which modes you checked.
 
 ## Rules for what lands
 
 - **Never commit generated or extracted material.** Nothing from
-  `src/game/recomp/gen/`, `build/`, `Burnout 3 Takedown/`, disassembly listings,
+  `.work/gen/`, `build/`, `roms/`, disassembly listings,
   memory dumps or captured pushbuffers. Screenshots and GIFs of the game running
   are fine.
 - **Don't hand-edit gen/.** If the generated C is wrong, fix the recompiler.

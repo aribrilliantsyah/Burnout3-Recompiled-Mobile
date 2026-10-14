@@ -9,7 +9,7 @@ history on `main`, no remote yet. Linux is the development host.
 Target phones: Snapdragon 7s Gen 2 (Adreno 710), Dimensity 920 (Mali-G68).
 
 The Switch port came from the NFS Carbon/NFSU2 ports; its Switch-only files
-are in `references/switch/` (not built). Upstream Windows port:
+were removed (2026-10-14; see antoxa2584x/burnout3-sw). Upstream Windows port:
 github.com/sp00nznet/burnout3 (software NV2A).
 
 ## Rules

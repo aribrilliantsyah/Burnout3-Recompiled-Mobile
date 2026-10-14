@@ -28,9 +28,9 @@ All notable changes to this project are recorded here. The format follows
   aperture mapping race; picture rotated 90° with landscape locked.
 
 ### Changed
-- Switch-only files moved to `references/switch/` (not built).
+- Switch-only files removed (they stay in the burnout3-sw history).
 - `tools/regen.sh` reads `roms/game/default.xbe` and writes `.work/gen/` by
   default.
 
 The Switch port's history is in
-[references/switch/CHANGELOG.md](references/switch/CHANGELOG.md).
+[antoxa2584x/burnout3-sw](https://github.com/antoxa2584x/burnout3-sw).

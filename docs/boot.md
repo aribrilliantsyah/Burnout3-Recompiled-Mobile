@@ -24,7 +24,7 @@ cmake --build build-xr --config Release --target burnout3
 RECOMP_PB_REPORT_MS=5000 RECOMP_FB_DUMP=frame ./bin/burnout3.exe --headless   # frame00000.bmp ...
 ```
 
-[running.md](running.md) covers the flags and variables. `RECOMP_PB_EXEC=0`
+The README's *Configuration* section covers the flags and variables. `RECOMP_PB_EXEC=0`
 turns the software GPU off: nothing is drawn, but the title runs about 50x
 faster, which is the quicker way to follow the boot by its file accesses.
 `saves/` holds the emulated HDD partition images; delete it for a first-boot

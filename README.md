@@ -324,7 +324,6 @@ burnout3-sw/
 ├── scripts/android/              # deps.sh, b3x.sh, test-runtime.sh
 ├── tools/regen.sh                # XBE → .work/gen/*.c (never committed)
 ├── docs/                         # research notes, screenshots
-├── references/switch/            # the Switch port's own files (not built)
 └── roms/                         # your disc and its extraction (git-ignored)
 ```
 
