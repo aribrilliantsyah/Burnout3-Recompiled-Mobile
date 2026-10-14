@@ -82,3 +82,41 @@ Build `e2654f1` + the ☰ menu, internal resolution 2x, Drive touch layout:
 716 files / 2.36 GB extracted into `<app files>/game` in 8 s (~290 MB/s),
 `UDATA` saves kept, PLAY reaches Crash Nav at 60 fps. The same extractor
 on the PC gives files identical (md5) to xiso's `roms/game`.
+
+## POCO M3 (Snapdragon 662 / Adreno 610)
+
+Identified via `getprop` and `cmd gpu vkjson`:
+
+| | |
+|---|---|
+| Serial | `95ccec010621` (USB) |
+| Model | POCO M3 (`M2010J19CG`, board `citrus` / `chime`) |
+| SoC | Qualcomm Snapdragon 662 (`SM6115`, bengal), 8 cores (4x Kryo 260 Gold @ 2.0 GHz + 4x Kryo 260 Silver @ 1.8 GHz) |
+| GPU | Adreno 610, driver `512.658.0` / `0x80212000` (`ro.hardware.vulkan=adreno`) |
+| Android | 15 (SDK 35), RisingOS 6.2 / LineageOS 22, build `AP4A.250105.002` |
+| Kernel | 4.19.157-perf, page size 4096 |
+| RAM | 5.6 GB (`MemTotal 5873760 kB`) |
+| Storage | 128 GB, 81 GB free at first connection |
+| ABIs | arm64-v8a, armeabi-v7a, armeabi |
+
+### Results
+
+- `scripts/android/test-runtime.sh`: all PASS on first run (page size 4096, 28/28 mirrors mapped, guest base at 0x71f3178000).
+- Vulkan path: device supports Vulkan 1.3 core API with push descriptors, but lacks `VK_KHR_dynamic_rendering` and `VK_EXT_vertex_input_dynamic_state`. The engine automatically selects the Vulkan 1.1 fallback path (render passes, descriptor sets, baked pipeline state, swapchain of 4 images).
+- Game data pushed via `scripts/android/b3x.sh push-game` (716 files / 2.36 GB).
+- Playable at native 1x resolution (640x480) with full real-time clock speed (`B3_FRAME_LOCK=0`).
+
+### Playable on POCO M3 (2026-10-14)
+
+Build `27caa6a`, internal resolution 1x, Drive/Full touch layout:
+
+| Screen | fps | Notes |
+|---|---|---|
+| Loading / Intros | 58-60 | Initial loading screen at solid 60 fps |
+| Title screen | 58 | "Press START to continue" |
+| Main Menu / Select Option | 58 | World Tour, Single Event, etc. |
+| Career Hub (Crash Nav, Select Location/Event) | 51-54 | USA / Silver Lake map |
+| Car select (garage) | 56 | Underground lit garage, 3D car reflections |
+| Race Training Videos | 51-60 | Rules of the Road (51 fps), Impact Time (60 fps) |
+| Race (Silver Lake, 6 cars) | 36-44 | Full 3D rendering, spark particles, smoke, collisions |
+

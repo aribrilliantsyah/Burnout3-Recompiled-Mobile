@@ -170,6 +170,7 @@ edit layout.
 | Device | SoC / GPU | Driver | Result |
 |---|---|---|---|
 | **Infinix X6815D** (Android 13) | MediaTek MT6877 (Dimensity 920 class), Mali-G68 MC4 | Mali r32p1, Vulkan 1.1 | ✅ menus 60 fps, races 55-60 fps at 2x, Vulkan 1.1 path |
+| **POCO M3** (Android 15) | Qualcomm Snapdragon 662, Adreno 610 | Adreno 512.658, Vulkan 1.1 | ✅ menus 58-60 fps, races 36-44 fps at 1x, Vulkan 1.1 path |
 | Snapdragon 7s Gen 2 phones | Adreno 710 | Vulkan 1.3 | ⏳ not tested yet |
 | Linux desktop (dev host) | any Vulkan GPU | RADV, lavapipe | ✅ |
 
