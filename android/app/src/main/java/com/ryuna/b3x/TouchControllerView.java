@@ -150,7 +150,9 @@ public final class TouchControllerView extends View {
     private final boolean autoHide, haptic;
     private boolean toggleVisible = true;
     private final Runnable hideToggle = () -> { toggleVisible = false; invalidate(); };
-    private final RectF toggleBtn = new RectF(), gearBtn = new RectF(), modeBtn = new RectF();
+    private final RectF toggleBtn = new RectF(), gearBtn = new RectF(), modeBtn = new RectF(), menuBtn = new RectF();
+    /** The in-game menu (hamburger): set by B3xActivity. */
+    Runnable onMenu;
 
     // FPS counter (game only)
     private final boolean showFps;
@@ -425,6 +427,7 @@ public final class TouchControllerView extends View {
         gearBtn.set(toggleBtn.right + dp(8), top, toggleBtn.right + dp(8) + h, top + h);
         float mw = text.measureText("DRIVE") + dp(22);
         modeBtn.set(toggleBtn.left - dp(8) - mw, top, toggleBtn.left - dp(8), top + h);
+        menuBtn.set(modeBtn.left - dp(8) - h, top, modeBtn.left - dp(8), top + h);
 
         // editor bar: [-] SIZE [+]   [-] OPACITY [+]  /  [MODE] [RESET] [CANCEL] [DONE]
         text.setTextSize(dp(12));
@@ -473,6 +476,7 @@ public final class TouchControllerView extends View {
             uiButton(canvas, toggleBtn, controlsVisible ? "HIDE" : "TOUCH", dp(11));
             uiButton(canvas, gearBtn, "\u2699", dp(15));
             uiButton(canvas, modeBtn, MODE_NAMES[mode], dp(11));
+            uiButton(canvas, menuBtn, "\u2630", dp(15));
         }
         if (showFps && !fps.isEmpty()) {
             text.setTextSize(dp(12));
@@ -655,8 +659,9 @@ public final class TouchControllerView extends View {
                     return true;
                 }
                 if (modeBtn.contains(x, y)) { switchMode(); showToggle(); return true; }
+                if (menuBtn.contains(x, y)) { releaseAll(); if (onMenu != null) onMenu.run(); return true; }
             }
-            if (toggleBtn.contains(x, y) || gearBtn.contains(x, y) || modeBtn.contains(x, y)
+            if (toggleBtn.contains(x, y) || gearBtn.contains(x, y) || modeBtn.contains(x, y) || menuBtn.contains(x, y)
                     || (physicalPad && autoHide)) {
                 if (physicalPad && autoHide) { physicalPad = false; controlsVisible = true; }
                 showToggle();
@@ -855,7 +860,7 @@ public final class TouchControllerView extends View {
 
     // ----------------------------------------------------------------- editor
 
-    private void openEditor() {
+    void openEditor() {
         releaseAll();
         removeCallbacks(hideToggle);
         toggleVisible = false;

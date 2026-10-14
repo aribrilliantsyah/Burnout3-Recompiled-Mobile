@@ -1,6 +1,7 @@
 package com.ryuna.b3x;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.os.Build;
@@ -61,6 +62,7 @@ public class B3xActivity extends SDLActivity {
         SharedPreferences p = Settings.prefs(this);
         sVibrate = p.getBoolean(Settings.K_VIBRATE, true);
         mPad = new TouchControllerView(this);
+        mPad.onMenu = this::showMenu;
         mLayout.addView(mPad, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                                                          ViewGroup.LayoutParams.MATCH_PARENT));
         // Plugged in from the start (nothing pressed), as a pad on port 1 of
@@ -107,6 +109,28 @@ public class B3xActivity extends SDLActivity {
     protected void onResume() {
         super.onResume();
         if (mPad != null) mPad.onPauseResume(true);
+    }
+
+    /** The hamburger: resume, layout editor, or leave for the launcher. */
+    private void showMenu() {
+        String[] items = { "Resume", "Edit touch layout", "Exit to launcher" };
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this,
+                android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Burnout 3")
+            .setItems(items, (dlg, which) -> {
+                if (which == 1 && mPad != null) mPad.openEditor();
+                else if (which == 2) exitToLauncher();
+            })
+            .create();
+        d.setOnDismissListener(x -> hideSystemBars());
+        d.show();
+    }
+
+    private void exitToLauncher() {
+        Intent i = new Intent(this, LauncherActivity.class)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        startActivity(i);
+        finish();          // onDestroy ends the :game process
     }
 
     @Override

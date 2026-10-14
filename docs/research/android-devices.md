@@ -56,3 +56,21 @@ Identified with REA `list_adb_devices` + `inspect_adb_device` and `getprop`:
   avoids it (FXAA defaults off anyway).
 - Surface rebuilt after home/resume.
 - Result: intro movies and the 'Press START' title render, ~1 core of CPU.
+
+## Playable on the Infinix (2026-10-14)
+
+Build `e2654f1` + the ☰ menu, internal resolution 2x, Drive touch layout:
+
+| Screen | fps | Notes |
+|---|---|---|
+| Intros, title, menus | 59-61 | |
+| Car select (garage) | 57 | lit garage, car reflections |
+| Race (Alpine, 6 cars) | 54-59 | GAS/steering/boost from the touch pad |
+
+- Profile load/save, race training video, race start and driving all work
+  with the touch pad only (screenshots in `docs/screenshots/android/`).
+- Random freezes (endless wait on the D3D fence event 0x0035F46C with the
+  GPU ring empty) fixed in `1a5fc1a`; not seen since in these sessions.
+- ☰ → Exit to launcher ends the `:game` process and returns to the
+  launcher; PLAY then starts a fresh game.
+- Not tested yet: a physical controller, tilt steering, FXAA on Mali.
