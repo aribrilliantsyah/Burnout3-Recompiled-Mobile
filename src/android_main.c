@@ -37,14 +37,51 @@ int b3x_game_main(void);   /* main.c */
 /* Java side (B3xActivity, the touch overlay)                         */
 
 extern void xbox_InputSetVirtual(int buttons, int face, int lt, int rt, int lx, int ly);
+extern void xbox_InputSetVirtualRight(int rx, int ry);
+extern void xbox_InputSetRumbleSink(void (*sink)(int left, int right));
 extern volatile float nv2a_vk_fps;
+
+/* Rumble with no physical pad: B3xActivity.rumble(left, right), 0..65535,
+ * on the game thread (SDL attaches it to the VM). The class is taken from
+ * the first nativeSetPad call: FindClass on a native thread cannot see app
+ * classes. Only changes are sent; the game re-sends every frame. */
+static jclass    s_act_cls;
+static jmethodID s_rumble_mid;
+
+static void rumble_sink(int left, int right)
+{
+    static int last_l = -1, last_r = -1;
+    JNIEnv *env;
+    if (!s_act_cls || (left == last_l && right == last_r))
+        return;
+    last_l = left;
+    last_r = right;
+    env = (JNIEnv *)SDL_AndroidGetJNIEnv();
+    if (env)
+        (*env)->CallStaticVoidMethod(env, s_act_cls, s_rumble_mid, left, right);
+}
 
 JNIEXPORT void JNICALL
 Java_com_ryuna_b3x_B3xActivity_nativeSetPad(JNIEnv *env, jclass cls, jint buttons, jint face,
                                             jint lt, jint rt, jint lx, jint ly)
 {
-    (void)env; (void)cls;
+    if (!s_act_cls) {
+        s_rumble_mid = (*env)->GetStaticMethodID(env, cls, "rumble", "(II)V");
+        if (s_rumble_mid) {
+            s_act_cls = (jclass)(*env)->NewGlobalRef(env, cls);
+            xbox_InputSetRumbleSink(rumble_sink);
+        } else {
+            (*env)->ExceptionClear(env);
+        }
+    }
     xbox_InputSetVirtual(buttons, face, lt, rt, lx, ly);
+}
+
+JNIEXPORT void JNICALL
+Java_com_ryuna_b3x_B3xActivity_nativeSetPadRight(JNIEnv *env, jclass cls, jint rx, jint ry)
+{
+    (void)env; (void)cls;
+    xbox_InputSetVirtualRight(rx, ry);
 }
 
 JNIEXPORT jfloat JNICALL

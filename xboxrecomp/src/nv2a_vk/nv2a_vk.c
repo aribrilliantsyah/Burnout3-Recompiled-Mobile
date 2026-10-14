@@ -4679,6 +4679,15 @@ static void vk_flip(void)
                     lw = lh * 16.0f / 9.0f;
                 scale = ww / lw < wh / lh ? ww / lw : wh / lh;
                 dw = (int)(lw * scale); dh = (int)(lh * scale);
+                {
+                    /* RECOMP_STRETCH=1: the whole window, aspect ignored. */
+                    static int stretch = -1;
+                    if (stretch < 0) {
+                        const char *e = getenv("RECOMP_STRETCH");
+                        stretch = e && *e == '1';
+                    }
+                    if (stretch) { dw = (int)ww; dh = (int)wh; }
+                }
                 dx = ((int)ww - dw) / 2; dy = ((int)wh - dh) / 2;
             }
             if (dw > 0 && dh > 0 && fxaa_on()

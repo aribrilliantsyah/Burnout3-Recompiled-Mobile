@@ -1,28 +1,41 @@
 package com.ryuna.b3x;
 
+import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
-import android.hardware.input.InputManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.VibrationEffect;
+import android.os.Vibrator;
+import android.os.VibratorManager;
 import android.view.InputDevice;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.ViewGroup;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
+import android.view.WindowManager;
 
 import org.libsdl.app.SDLActivity;
 
 /**
  * The game. SDLActivity creates the surface, the audio device and the
  * input plumbing, loads the native libraries and runs SDL_main
- * (src/android_main.c) on its own thread. On top: the touch pad and the
- * FPS counter (TouchPad), configured in LauncherActivity.
+ * (src/android_main.c) on its own thread. On top: TouchControllerView
+ * (touch pad, its in-game editor, the FPS counter). Runs in its own
+ * process (":game"), which ends with it.
  */
-public class B3xActivity extends SDLActivity implements InputManager.InputDeviceListener {
+public class B3xActivity extends SDLActivity {
     static native void nativeSetPad(int buttons, int face, int lt, int rt, int lx, int ly);
+    static native void nativeSetPadRight(int rx, int ry);
     static native float nativeGetFps();
 
-    private TouchPad mPad;
-    private boolean mPadWanted, mPadAuto;
+    private static B3xActivity sSelf;
+    private static boolean sVibrate;
+    private TouchControllerView mPad;
     private final Handler mHandler = new Handler(Looper.getMainLooper());
     private final Runnable mFpsTick = new Runnable() {
         @Override public void run() {
@@ -43,37 +56,30 @@ public class B3xActivity extends SDLActivity implements InputManager.InputDevice
         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         super.onCreate(savedInstanceState);
         if (mLayout == null) return;     // SDL failed to start (shows its own dialog)
+        sSelf = this;
         hideSystemBars();
-
         SharedPreferences p = Settings.prefs(this);
-        mPadWanted = p.getBoolean(Settings.K_PAD, true);
-        mPadAuto = p.getBoolean(Settings.K_PAD_AUTOHIDE, true);
-        mPad = new TouchPad(this, mPadWanted && !(mPadAuto && hasGamepad()),
-                            p.getBoolean(Settings.K_FPS, false),
-                            p.getInt(Settings.K_PAD_SIZE, 100) / 100f,
-                            p.getInt(Settings.K_PAD_OPACITY, 60));
+        sVibrate = p.getBoolean(Settings.K_VIBRATE, true);
+        mPad = new TouchControllerView(this);
         mLayout.addView(mPad, new ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                                                          ViewGroup.LayoutParams.MATCH_PARENT));
         // Plugged in from the start (nothing pressed), as a pad on port 1 of
         // the Xbox would be, so the game sees player 1 before the first touch.
-        if (mPadWanted) nativeSetPad(0, 0, 0, 0, 0, 0);
-        InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
-        if (im != null) im.registerInputDeviceListener(this, mHandler);
+        nativeSetPad(0, 0, 0, 0, 0, 0);
         mHandler.post(mFpsTick);
     }
 
-    /** Full screen: no status or navigation bar (they come back on a swipe). */
+    /** Full screen under the cutout; bars come back on a swipe. */
     private void hideSystemBars() {
-        android.view.Window w = getWindow();
+        Window w = getWindow();
         w.setDecorFitsSystemWindows(false);
-        android.view.WindowManager.LayoutParams lp = w.getAttributes();
-        lp.layoutInDisplayCutoutMode =
-            android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+        WindowManager.LayoutParams lp = w.getAttributes();
+        lp.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
         w.setAttributes(lp);
-        android.view.WindowInsetsController c = w.getInsetsController();
+        WindowInsetsController c = w.getDecorView().getWindowInsetsController();
         if (c != null) {
-            c.hide(android.view.WindowInsets.Type.systemBars());
-            c.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            c.hide(WindowInsets.Type.systemBars());
+            c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
         }
     }
 
@@ -91,10 +97,47 @@ public class B3xActivity extends SDLActivity implements InputManager.InputDevice
     }
 
     @Override
+    protected void onPause() {
+        if (mPad != null) mPad.onPauseResume(false);
+        rumbleNow(0, 0);
+        super.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (mPad != null) mPad.onPauseResume(true);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (mPad != null && mPad.onBack()) return;
+        super.onBackPressed();
+    }
+
+    // A physical pad in use hides the touch overlay.
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (mPad != null && isPad(e.getSource())) mPad.onPhysicalInput();
+        return super.dispatchKeyEvent(e);
+    }
+
+    @Override
+    public boolean dispatchGenericMotionEvent(MotionEvent e) {
+        if (mPad != null && isPad(e.getSource())) mPad.onPhysicalInput();
+        return super.dispatchGenericMotionEvent(e);
+    }
+
+    private static boolean isPad(int src) {
+        return (src & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+            || (src & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+    }
+
+    @Override
     protected void onDestroy() {
         mHandler.removeCallbacks(mFpsTick);
-        InputManager im = (InputManager) getSystemService(INPUT_SERVICE);
-        if (im != null) im.unregisterInputDeviceListener(this);
+        rumbleNow(0, 0);
+        sSelf = null;
         boolean finishing = isFinishing();
         super.onDestroy();
         // The recompiled game cannot start twice in one process; it runs in
@@ -104,24 +147,30 @@ public class B3xActivity extends SDLActivity implements InputManager.InputDevice
             android.os.Process.killProcess(android.os.Process.myPid());
     }
 
-    private static boolean hasGamepad() {
-        for (int id : InputDevice.getDeviceIds()) {
-            InputDevice d = InputDevice.getDevice(id);
-            if (d == null || d.isVirtual()) continue;
-            int s = d.getSources();
-            if ((s & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
-                    || (s & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK)
-                return true;
+    // ------------------------------------------------------------- rumble
+
+    /** From native (android_main.c), the game thread: the game's rumble,
+     *  0..65535 per motor, when no physical pad takes it. */
+    @SuppressWarnings("unused")
+    static void rumble(int left, int right) {
+        if (!sVibrate) return;
+        B3xActivity a = sSelf;
+        if (a != null) a.rumbleNow(left, right);
+    }
+
+    private void rumbleNow(int left, int right) {
+        Vibrator v;
+        if (Build.VERSION.SDK_INT >= 31) {
+            VibratorManager vm = (VibratorManager) getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
+            v = vm == null ? null : vm.getDefaultVibrator();
+        } else {
+            v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
         }
-        return false;
+        if (v == null || !v.hasVibrator()) return;
+        int amp = Math.max(left, right) >> 8;          // 0..255
+        if (amp < 8) { v.cancel(); return; }
+        // A second at that strength; the game sends a new level when it
+        // changes, and zero to stop.
+        v.vibrate(VibrationEffect.createOneShot(1000, Math.min(255, Math.max(1, amp))));
     }
-
-    private void updatePad() {
-        if (mPad != null)
-            mPad.setPadVisible(mPadWanted && !(mPadAuto && hasGamepad()));
-    }
-
-    @Override public void onInputDeviceAdded(int id) { updatePad(); }
-    @Override public void onInputDeviceRemoved(int id) { updatePad(); }
-    @Override public void onInputDeviceChanged(int id) { updatePad(); }
 }

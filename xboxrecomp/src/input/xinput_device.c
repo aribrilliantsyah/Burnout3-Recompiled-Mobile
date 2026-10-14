@@ -11,6 +11,7 @@
  */
 
 #include "xinput_xbox.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -265,6 +266,7 @@ static volatile int  g_virt_buttons;        /* XBOX_GAMEPAD_* digital bits */
 static volatile int  g_virt_face;           /* bit n = analog button n (A,B,X,Y,BLACK,WHITE) */
 static volatile int  g_virt_lt, g_virt_rt;  /* 0..255 */
 static volatile int  g_virt_lx, g_virt_ly;  /* -32768..32767, Y up */
+static volatile int  g_virt_rx, g_virt_ry;
 
 void xbox_InputSetVirtual(int buttons, int face, int lt, int rt, int lx, int ly)
 {
@@ -275,6 +277,120 @@ void xbox_InputSetVirtual(int buttons, int face, int lt, int rt, int lx, int ly)
     g_virt_lx = lx;
     g_virt_ly = ly;
     g_virt_on = 1;
+}
+
+void xbox_InputSetVirtualRight(int rx, int ry)
+{
+    g_virt_rx = rx;
+    g_virt_ry = ry;
+}
+
+/* ---- rumble to the host (Android: the phone's vibrator when no pad) ---- */
+static void (*g_rumble_sink)(int left, int right);
+
+void xbox_InputSetRumbleSink(void (*sink)(int left, int right))
+{
+    g_rumble_sink = sink;
+}
+
+/* ---- physical pad remap ------------------------------------------------
+ * RECOMP_PAD_MAP=<file>: lines "xbox=sdl", e.g. "a=b", "black=leftshoulder",
+ * "lt=lefttrigger", "rt=a". xbox: a b x y black white lt rt up down left right
+ * start back lthumb rthumb. sdl: SDL_GameControllerGetStringForButton /
+ * ForAxis names (a b x y back guide start leftstick rightstick leftshoulder
+ * rightshoulder dpup dpdown dpleft dpright misc1 paddle1-4 touchpad,
+ * lefttrigger righttrigger), or "none". Also "deadzone=<0..50>" (percent,
+ * sticks) and "invert_ly=1" / "invert_ry=1". */
+enum { PM_A, PM_B, PM_X, PM_Y, PM_BLACK, PM_WHITE, PM_LT, PM_RT, PM_UP, PM_DOWN,
+       PM_LEFT, PM_RIGHT, PM_START, PM_BACK, PM_LTHUMB, PM_RTHUMB, PM_N };
+static const char *const pm_names[PM_N] = {
+    "a", "b", "x", "y", "black", "white", "lt", "rt", "up", "down",
+    "left", "right", "start", "back", "lthumb", "rthumb" };
+/* source: >= 0 an SDL button, <= -2 an SDL axis (-2 - axis), -1 none */
+static int pm_src[PM_N];
+static int pm_loaded, pm_deadzone, pm_inv_ly, pm_inv_ry;
+
+static void pm_defaults(void)
+{
+    pm_src[PM_A] = SDL_CONTROLLER_BUTTON_A;
+    pm_src[PM_B] = SDL_CONTROLLER_BUTTON_B;
+    pm_src[PM_X] = SDL_CONTROLLER_BUTTON_X;
+    pm_src[PM_Y] = SDL_CONTROLLER_BUTTON_Y;
+    pm_src[PM_BLACK] = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+    pm_src[PM_WHITE] = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+    pm_src[PM_LT] = -2 - SDL_CONTROLLER_AXIS_TRIGGERLEFT;
+    pm_src[PM_RT] = -2 - SDL_CONTROLLER_AXIS_TRIGGERRIGHT;
+    pm_src[PM_UP] = SDL_CONTROLLER_BUTTON_DPAD_UP;
+    pm_src[PM_DOWN] = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
+    pm_src[PM_LEFT] = SDL_CONTROLLER_BUTTON_DPAD_LEFT;
+    pm_src[PM_RIGHT] = SDL_CONTROLLER_BUTTON_DPAD_RIGHT;
+    pm_src[PM_START] = SDL_CONTROLLER_BUTTON_START;
+    pm_src[PM_BACK] = SDL_CONTROLLER_BUTTON_BACK;
+    pm_src[PM_LTHUMB] = SDL_CONTROLLER_BUTTON_LEFTSTICK;
+    pm_src[PM_RTHUMB] = SDL_CONTROLLER_BUTTON_RIGHTSTICK;
+}
+
+static void pm_load(void)
+{
+    const char *path = getenv("RECOMP_PAD_MAP");
+    FILE *f;
+    char line[128];
+
+    pm_loaded = 1;
+    pm_defaults();
+    if (!path || !*path || !(f = fopen(path, "r")))
+        return;
+    while (fgets(line, sizeof line, f)) {
+        char *eq = strchr(line, '='), *v;
+        int i;
+        if (!eq || line[0] == '#')
+            continue;
+        *eq = 0;
+        v = eq + 1;
+        v[strcspn(v, "\r\n ")] = 0;
+        if (!strcmp(line, "deadzone")) { pm_deadzone = atoi(v); continue; }
+        if (!strcmp(line, "invert_ly")) { pm_inv_ly = atoi(v); continue; }
+        if (!strcmp(line, "invert_ry")) { pm_inv_ry = atoi(v); continue; }
+        for (i = 0; i < PM_N; i++) {
+            SDL_GameControllerButton b;
+            SDL_GameControllerAxis a;
+            if (strcmp(line, pm_names[i]))
+                continue;
+            if (!strcmp(v, "none")) { pm_src[i] = -1; break; }
+            b = SDL_GameControllerGetButtonFromString(v);
+            if (b != SDL_CONTROLLER_BUTTON_INVALID) { pm_src[i] = b; break; }
+            a = SDL_GameControllerGetAxisFromString(v);
+            if (a == SDL_CONTROLLER_AXIS_TRIGGERLEFT || a == SDL_CONTROLLER_AXIS_TRIGGERRIGHT)
+                pm_src[i] = -2 - (int)a;
+            break;
+        }
+    }
+    fclose(f);
+    fprintf(stderr, "[input] pad map from %s (deadzone %d%%)\n", path, pm_deadzone);
+}
+
+/* 0..255 */
+static int pm_read(SDL_GameController *c, int i)
+{
+    int s = pm_src[i];
+    if (s == -1)
+        return 0;
+    if (s >= 0)
+        return SDL_GameControllerGetButton(c, (SDL_GameControllerButton)s) ? 255 : 0;
+    return SDL_GameControllerGetAxis(c, (SDL_GameControllerAxis)(-2 - s)) >> 7;
+}
+
+static SHORT pm_stick(SHORT v)
+{
+    int dz = pm_deadzone * 32767 / 100;
+    int a = v < 0 ? -v : v;
+    if (!dz)
+        return v;
+    if (a <= dz)
+        return 0;
+    a = (int)((long)(a - dz) * 32767 / (32767 - dz));
+    if (a > 32767) a = 32767;
+    return (SHORT)(v < 0 ? -a : a);
 }
 
 static void virt_merge(XBOX_INPUT_STATE *s)
@@ -291,6 +407,10 @@ static void virt_merge(XBOX_INPUT_STATE *s)
     if (g_virt_lx || g_virt_ly) {
         s->Gamepad.sThumbLX = (SHORT)g_virt_lx;
         s->Gamepad.sThumbLY = (SHORT)g_virt_ly;
+    }
+    if (g_virt_rx || g_virt_ry) {
+        s->Gamepad.sThumbRX = (SHORT)g_virt_rx;
+        s->Gamepad.sThumbRY = (SHORT)g_virt_ry;
     }
 }
 
@@ -354,44 +474,37 @@ DWORD xbox_InputGetState(DWORD dwPort, XBOX_INPUT_STATE *pState)
     memset(pState, 0, sizeof(XBOX_INPUT_STATE));
     pState->dwPacketNumber = ++g_packet[dwPort];
 
-    WORD btn = 0;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_UP))    btn |= XBOX_GAMEPAD_DPAD_UP;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_DOWN))  btn |= XBOX_GAMEPAD_DPAD_DOWN;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_LEFT))  btn |= XBOX_GAMEPAD_DPAD_LEFT;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_DPAD_RIGHT)) btn |= XBOX_GAMEPAD_DPAD_RIGHT;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_START))      btn |= XBOX_GAMEPAD_START;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_BACK))       btn |= XBOX_GAMEPAD_BACK;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSTICK))  btn |= XBOX_GAMEPAD_LEFT_THUMB;
-    if (SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSTICK)) btn |= XBOX_GAMEPAD_RIGHT_THUMB;
-    pState->Gamepad.wButtons = btn;
-
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_A] =
-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_A) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_B] =
-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_B) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_X] =
-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_X) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_Y] =
-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_Y) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_BLACK] =
-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_LEFTSHOULDER) ? 255 : 0;
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_WHITE] =
-        SDL_GameControllerGetButton(c, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER) ? 255 : 0;
-
-    /* SDL trigger axes are 0..32767 -> Xbox analog button 0..255 */
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_LTRIGGER] =
-        (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) >> 7);
-    pState->Gamepad.bAnalogButtons[XBOX_BUTTON_RTRIGGER] =
-        (BYTE)(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) >> 7);
+    if (!pm_loaded)
+        pm_load();
+    {
+        static const WORD dbits[] = {
+            XBOX_GAMEPAD_DPAD_UP, XBOX_GAMEPAD_DPAD_DOWN, XBOX_GAMEPAD_DPAD_LEFT,
+            XBOX_GAMEPAD_DPAD_RIGHT, XBOX_GAMEPAD_START, XBOX_GAMEPAD_BACK,
+            XBOX_GAMEPAD_LEFT_THUMB, XBOX_GAMEPAD_RIGHT_THUMB };
+        static const BYTE abtn[] = {
+            XBOX_BUTTON_A, XBOX_BUTTON_B, XBOX_BUTTON_X, XBOX_BUTTON_Y,
+            XBOX_BUTTON_BLACK, XBOX_BUTTON_WHITE, XBOX_BUTTON_LTRIGGER, XBOX_BUTTON_RTRIGGER };
+        WORD btn = 0;
+        int i;
+        for (i = 0; i < 8; i++)
+            if (pm_read(c, PM_UP + i) > 127)
+                btn |= dbits[i];
+        pState->Gamepad.wButtons = btn;
+        /* Xbox face buttons and triggers are analog (0..255). */
+        for (i = 0; i < 8; i++)
+            pState->Gamepad.bAnalogButtons[abtn[i]] = (BYTE)pm_read(c, PM_A + i);
+    }
 
     /* SDL Y axis points down; the Xbox Y axis points up -- invert.
      * Use (-1 - v) so v = -32768 does not overflow SHORT. */
-    pState->Gamepad.sThumbLX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
-    pState->Gamepad.sThumbLY =
-        (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
-    pState->Gamepad.sThumbRX = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX);
-    pState->Gamepad.sThumbRY =
-        (SHORT)(-1 - SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY));
+    {
+        SHORT ly = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY);
+        SHORT ry = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY);
+        pState->Gamepad.sThumbLX = pm_stick(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX));
+        pState->Gamepad.sThumbLY = pm_stick((SHORT)(pm_inv_ly ? ly : -1 - ly));
+        pState->Gamepad.sThumbRX = pm_stick(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX));
+        pState->Gamepad.sThumbRY = pm_stick((SHORT)(pm_inv_ry ? ry : -1 - ry));
+    }
     if (dwPort == 0 && g_virt_on)
         virt_merge(pState);
 
@@ -404,7 +517,11 @@ DWORD xbox_InputSetState(DWORD dwPort, const XBOX_VIBRATION *pVibration)
         return ERROR_DEVICE_NOT_CONNECTED;
 
     SDL_GameController *c = g_pads[dwPort];
-    if (!c) return ERROR_DEVICE_NOT_CONNECTED;
+    if (!c || !SDL_GameControllerGetAttached(c)) {
+        if (dwPort == 0 && g_rumble_sink)
+            g_rumble_sink(pVibration->wLeftMotorSpeed, pVibration->wRightMotorSpeed);
+        return c ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;
+    }
 
     /* SDL rumble needs a duration; refresh for ~1s on each call (the game
      * polls vibration continuously). */

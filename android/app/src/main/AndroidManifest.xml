@@ -41,6 +41,20 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".EditorActivity"
+            android:exported="true"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation" />
+
+        <activity
+            android:name=".GamepadMapActivity"
+            android:exported="false"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation" />
+
         <!-- The game; landscape only (also forced in code: SDL would ask
              for FULL_USER for its resizable window). -->
         <activity
