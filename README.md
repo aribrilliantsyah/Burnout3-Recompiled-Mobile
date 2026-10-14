@@ -280,8 +280,7 @@ SHA-256, commit `Release <v>`, tag `v<v>`, push, GitHub Release with the APK.
 `--draft` makes a draft release. The `release` workflow then checks the tag,
 the changelog, the checksum and the APK's signature and version.
 
-Keep a backup of `~/.android-keys/b3x-release.jks` and its password: updates
-must be signed with the same key.
+Step by step, what stays private and key backup: [docs/RELEASING.md](docs/RELEASING.md).
 
 </details>
 
