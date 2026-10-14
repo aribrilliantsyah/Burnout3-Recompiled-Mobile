@@ -15,7 +15,7 @@ with Vulkan, and its APU is mixed into Android audio.
 [![Vulkan](https://img.shields.io/badge/Vulkan-1.1%2B-AC162C?style=flat&logo=vulkan&logoColor=white)](#-how-it-works)
 [![Game](https://img.shields.io/badge/Xbox-NTSC--U%200x4541005B-107C10?style=flat&logo=xbox&logoColor=white)](#-quick-start)
 [![FPS](https://img.shields.io/badge/Dimensity%20920-~60%20fps-success?style=flat)](#-devices)
-[![Version](https://img.shields.io/badge/version-0.0.1-blue?style=flat)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 <p align="center">
@@ -255,6 +255,36 @@ NFSU2_GAME_DIR=$PWD/roms/game build/linux-vk/b3_recomp
 
 </details>
 
+<details>
+<summary><b>3. Release</b> (signed APK → GitHub Release)</summary>
+
+Releases are built on the maintainer's machine: `libmain.so` comes from code
+lifted out of `default.xbe`, which never leaves `roms/`.
+
+```sh
+scripts/android/keystore.sh      # once: release key + android/keystore.properties (git-ignored)
+gh auth login                    # once: GitHub CLI
+
+scripts/release.sh --current     # first release: 1.0.0 as in android/version.properties
+scripts/release.sh patch         # 1.0.1 -> 1.0.2
+scripts/release.sh minor         # 1.0.2 -> 1.1.0
+scripts/release.sh major         # 1.1.0 -> 2.0.0
+scripts/release.sh 1.4.0         # an explicit version
+```
+
+Each run: version into `android/version.properties` (versionCode =
+major·10000 + minor·100 + patch), CHANGELOG `[Unreleased]` becomes the
+version's section, native + signed release APK, `dist/b3x-<v>.apk` and its
+SHA-256, commit `Release <v>`, tag `v<v>`, push, GitHub Release with the APK.
+`--no-native` reuses libmain.so, `--no-publish` stops before pushing,
+`--draft` makes a draft release. The `release` workflow then checks the tag,
+the changelog, the checksum and the APK's signature and version.
+
+Keep a backup of `~/.android-keys/b3x-release.jks` and its password: updates
+must be signed with the same key.
+
+</details>
+
 ## ⚙️ Configuration
 
 The launcher writes everything it sets; anything else goes in `b3x_env.txt`
@@ -319,9 +349,11 @@ burnout3-sw/
 │   ├── android_main.c            # SDL_main on Android, env, JNI
 │   ├── main.c                    # boot and runtime defaults
 │   └── recomp_manual.c           # hand-written overrides of lifted functions
+├── .github/workflows/release.yml # checks each release tag and its APK
 ├── xboxrecomp/                   # the toolkit, vendored with this port's changes
 │   └── src/{kernel,nv2a_vk,input,audio,platform}/
-├── scripts/android/              # deps.sh, b3x.sh, test-runtime.sh
+├── scripts/release.sh            # version bump, signed APK, GitHub Release
+├── scripts/android/              # deps.sh, b3x.sh, keystore.sh, test-runtime.sh
 ├── tools/regen.sh                # XBE → .work/gen/*.c (never committed)
 ├── docs/                         # research notes, screenshots
 └── roms/                         # your disc and its extraction (git-ignored)

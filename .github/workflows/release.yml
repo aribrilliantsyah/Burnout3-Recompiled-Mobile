@@ -1,0 +1,64 @@
+# The APK is built and published on the maintainer's machine
+# (scripts/release.sh): libmain.so is compiled from code lifted out of the
+# game's default.xbe, which is never in this repository. This workflow
+# checks every release tag: the tag matches android/version.properties,
+# CHANGELOG has the section, the release carries a signed APK and its
+# checksum. It fails loudly if a tag was pushed without the release.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches android/version.properties
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          [ "${{ github.event_name }}" = release ] && tag="${{ github.event.release.tag_name }}" && tag="${tag#v}"
+          file="$(sed -n 's/^VERSION_NAME=//p' android/version.properties)"
+          echo "tag $tag, version.properties $file"
+          if [ "${{ github.event_name }}" != workflow_dispatch ] && [ "$tag" != "$file" ]; then
+            echo "::error::tag v$tag but android/version.properties says $file"; exit 1
+          fi
+          grep -q "^## \[$file\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no [$file] section"; exit 1; }
+          echo "VERSION=$file" >> "$GITHUB_ENV"
+
+      - name: Release has the APK
+        if: github.event_name != 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # scripts/release.sh pushes the tag first, then uploads; give it time.
+          for i in $(seq 1 30); do
+            if gh release view "v$VERSION" --json assets -q '.assets[].name' > assets.txt 2>/dev/null \
+               && grep -qx "b3x-$VERSION.apk" assets.txt && grep -qx "b3x-$VERSION.apk.sha256" assets.txt; then
+              break
+            fi
+            sleep 20
+          done
+          grep -qx "b3x-$VERSION.apk" assets.txt || { echo "::error::release v$VERSION has no b3x-$VERSION.apk"; exit 1; }
+          gh release download "v$VERSION" -p "b3x-$VERSION.apk*" -D dl
+          (cd dl && sha256sum -c "b3x-$VERSION.apk.sha256")
+
+      - name: APK is signed and versioned
+        if: github.event_name != 'workflow_dispatch'
+        run: |
+          bt="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$bt/apksigner" verify --print-certs "dl/b3x-$VERSION.apk" | tee certs.txt
+          grep -q "CN=b3x" certs.txt || { echo "::error::APK not signed with the release key"; exit 1; }
+          "$bt/aapt2" dump badging "dl/b3x-$VERSION.apk" | head -1 | tee badging.txt
+          grep -q "package: name='com.ryuna.b3x'" badging.txt
+          grep -q "versionName='$VERSION'" badging.txt || { echo "::error::APK versionName is not $VERSION"; exit 1; }
+          echo "### b3x $VERSION" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"; cat badging.txt certs.txt >> "$GITHUB_STEP_SUMMARY"; echo '```' >> "$GITHUB_STEP_SUMMARY"

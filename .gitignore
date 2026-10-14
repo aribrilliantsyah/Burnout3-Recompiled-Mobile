@@ -95,3 +95,7 @@ vkpipes.bin
 vkspirv.bin
 b3x_options.txt
 b3x_env.txt
+android/keystore.properties
+*.jks
+*.keystore
+dist/
