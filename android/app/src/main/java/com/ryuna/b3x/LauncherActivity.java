@@ -38,7 +38,7 @@ public class LauncherActivity extends Activity {
     private EditText mDir;
     private TextView mDirStatus, mPadStatus;
     private View mPlay;
-    private android.widget.Button mIsoBtn;
+    private android.widget.Button mIsoBtn, mIsoSmall;
     private TextView mPlayHint;
     private volatile boolean mCancelExtract;
 
@@ -113,7 +113,8 @@ public class LauncherActivity extends Activity {
         mIsoBtn = ui.primary("INSTALL FROM ISO…", v -> pickIso());
         c.addView(mIsoBtn, new LinearLayout.LayoutParams(-1, -2));
         mPlayHint = ui.summary("Pick your Burnout 3 disc image (.iso, Xbox NTSC-U). It is extracted once "
-                + "into the app's folder (~2.4 GB); afterwards the .iso can be deleted.");
+                + "into the app's folder (~2.4 GB); afterwards the .iso can be deleted. "
+                + "Extracted it on a PC already? Choose that folder below.");
         mPlayHint.setPadding(0, ui.dp(4), 0, ui.dp(10));
         c.addView(mPlayHint);
         c.addView(ui.text("Game folder (contains default.xbe)", 13, UiKit.DIM));
@@ -142,6 +143,11 @@ public class LauncherActivity extends Activity {
             saveDir(mDir.getText().toString());
         }), new LinearLayout.LayoutParams(0, -2, 1f));
         c.addView(row);
+        // with a game installed: the ISO install stays here, small
+        mIsoSmall = ui.secondary("Install again from ISO…", v -> pickIso());
+        LinearLayout.LayoutParams il = new LinearLayout.LayoutParams(-1, -2);
+        il.topMargin = ui.dp(8);
+        c.addView(mIsoSmall, il);
         mPlay = ui.primary("PLAY", v -> play());
         LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(-1, -2);
         pl.topMargin = ui.dp(12);
@@ -320,6 +326,7 @@ public class LauncherActivity extends Activity {
         mPlay.setVisibility(have ? View.VISIBLE : View.GONE);
         mIsoBtn.setVisibility(have ? View.GONE : View.VISIBLE);
         mPlayHint.setVisibility(have ? View.GONE : View.VISIBLE);
+        mIsoSmall.setVisibility(have ? View.VISIBLE : View.GONE);
     }
 
     private void pickFolder() {
