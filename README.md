@@ -52,28 +52,65 @@ internal resolution 2x, the Drive touch layout.
     <td><img src="docs/screenshots/android/menu.jpg" alt="Main menu"><br><sub>Main menu, profile loaded</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/android/launcher.jpg" alt="Launcher"><br><sub>Launcher: game folder, display, graphics, controls</sub></td>
+    <td><img src="docs/screenshots/android/launcher-iso.jpg" alt="First run"><br><sub>First run: INSTALL FROM ISO… or choose an extracted folder</sub></td>
+    <td><img src="docs/screenshots/android/iso-progress.jpg" alt="Extracting"><br><sub>Extracting the .iso on the phone (~290 MB/s)</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/android/iso-done.jpg" alt="Installed"><br><sub>716 files in 8 s; keep or delete the .iso</sub></td>
+    <td><img src="docs/screenshots/android/launcher.jpg" alt="Launcher"><br><sub>Installed: PLAY, the folder can still be changed</sub></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/android/menu-pause.jpg" alt="In-game menu"><br><sub>☰ in-game menu: resume, edit layout, exit</sub></td>
+    <td></td>
   </tr>
 </table>
 
 ## 🚀 Quick start
 
-1. **Get the disc image** of your own Xbox disc: Burnout 3: Takedown, NTSC-U
-   (`.iso`, an "XISO" image of ~2.4 GB). Copy it to the phone, e.g.
-   `Download/`.
-2. **Install the APK** and open **b3x**.
-3. **First run:** tap **INSTALL FROM ISO…** and pick the `.iso`. The launcher
-   checks it (XDVDFS, title `4541005B`, free space), extracts it once into the
-   app's folder with a progress bar (about 1-3 min), then offers to delete
-   the `.iso`.
-4. **PLAY.** From then on the launcher goes straight to PLAY; the ISO is not
-   needed again.
+1. **Install the APK** and open **b3x**.
+2. **Give it the game**, one of two ways:
+   - **From the disc image** — copy your `.iso` (Burnout 3: Takedown, Xbox
+     NTSC-U, ~2.4 GB) to the phone, e.g. `Download/`, tap **INSTALL FROM
+     ISO…** and pick it. The launcher checks it, extracts it once into the
+     app's folder (8 s on the Infinix) and offers to delete the `.iso`.
+   - **Already extracted on a PC** — copy the folder (the one with
+     `default.xbe`) to the phone and point the launcher at it: **Choose
+     folder…**, type the path, or put it in
+     `Android/data/com.ryuna.b3x/files/game/` and tap **Use app folder**.
+3. **PLAY.** Next time the launcher goes straight to PLAY.
 
-Already have the disc extracted? Put the folder (with `default.xbe`) in
-`Android/data/com.ryuna.b3x/files/game/`, or anywhere and pick it with
-*Choose folder…* (asks for *All files access*). Saves live in the game
-folder's `UDATA/` and survive a reinstall from ISO.
+```mermaid
+flowchart TD
+    A([Open b3x]) --> B{default.xbe in<br/>the game folder?}
+    B -->|yes| P[PLAY]
+    B -->|no| C{What do you have?}
+
+    C -->|the disc image .iso| I[INSTALL FROM ISO…<br/>pick the .iso]
+    C -->|a folder extracted on a PC| F[Choose folder… / type the path<br/>/ Use app folder]
+
+    I --> V{Xbox image?<br/>title 4541005B?<br/>enough free space?}
+    V -->|no| E[Error message:<br/>not an Xbox image, wrong game,<br/>or not enough space]
+    E --> C
+    V -->|yes| X[Extract into game.tmp/<br/>progress · MB/s · Cancel]
+    X -->|cancelled or failed| D[game.tmp/ removed,<br/>old game untouched]
+    D --> C
+    X -->|done| R[Rename game.tmp/ to game/<br/>saves in UDATA/ kept]
+    R --> Q[Offer to delete the .iso]
+    Q --> OK[Game installed ✓]
+    OK --> P
+
+    F --> G{Outside the app's folder?}
+    G -->|yes| H[Grant All files access]
+    H --> B
+    G -->|no| B
+
+    P --> S[Game: Xbox 4:3 picture,<br/>touch pad or controller]
+    S -->|☰ → Exit to launcher| A
+```
+
+The two ways can be mixed: **Install again from ISO…** stays on the Game
+card after a first install, and the folder can be changed at any time.
+Saves live in the game folder's `UDATA/`; a reinstall from ISO keeps them.
 
 ## ✨ Features
 
@@ -142,15 +179,26 @@ Requirements: Android 11 (API 30) or newer, arm64-v8a, Vulkan 1.1, about
 
 ## 🧩 How it works
 
-```
-default.xbe ──(xboxrecomp lifter, x86 → C)──▶ .work/gen/*.c  ┐
-                                                            ├─▶ libmain.so (NDK, arm64)
-xboxrecomp runtime: Xbox kernel, memory, threads ───────────┤
-NV2A push-buffer executor  → nv2a_vk (Vulkan) ──────────────┤
-MCPX APU (voices, DSP)     → SDL audio ─────────────────────┤
-USB gamepad                → touch pad / SDL GameController ┘
-                                                              │
-android/ (SDLActivity + launcher, touch pad, editor) ─────────▶ b3x.apk
+```mermaid
+flowchart LR
+    subgraph Build[On the PC, once per change]
+        XBE[default.xbe] -->|xboxrecomp lifter<br/>x86 → C| GEN[.work/gen/*.c]
+        GEN --> NDK[NDK clang -O2]
+        RT[xboxrecomp runtime<br/>kernel, memory, threads] --> NDK
+        NDK --> SO[libmain.so arm64]
+        JAVA[android/ Java<br/>launcher, touch pad, editor] --> APK[b3x.apk]
+        SO --> APK
+    end
+
+    subgraph Phone[On the phone]
+        ISO[(your .iso or<br/>extracted folder)] --> LAUNCH[Launcher]
+        LAUNCH -->|game/ + settings files| GAME[Game process :game]
+        GAME --> GPU[NV2A push buffers<br/>to Vulkan via nv2a_vk]
+        GAME --> APU[MCPX APU<br/>to SDL audio]
+        PAD[Touch pad or controller] -->|XInput port 1| GAME
+    end
+
+    APK --> LAUNCH
 ```
 
 - The guest's 4 GB address space is reserved once; the XBE, the 64 MB of RAM

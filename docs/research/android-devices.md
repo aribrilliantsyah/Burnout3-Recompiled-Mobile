@@ -74,3 +74,11 @@ Build `e2654f1` + the ☰ menu, internal resolution 2x, Drive touch layout:
 - ☰ → Exit to launcher ends the `:game` process and returns to the
   launcher; PLAY then starts a fresh game.
 - Not tested yet: a physical controller, tilt steering, FXAA on Mali.
+
+## Install from ISO (2026-10-14)
+
+`Burnout 3 - Takedown (USA).iso` (2,476,867,584 bytes, XISO at base 0) in
+`Download/`, picked with the system file picker: checked (title 4541005B),
+716 files / 2.36 GB extracted into `<app files>/game` in 8 s (~290 MB/s),
+`UDATA` saves kept, PLAY reaches Crash Nav at 60 fps. The same extractor
+on the PC gives files identical (md5) to xiso's `roms/game`.
