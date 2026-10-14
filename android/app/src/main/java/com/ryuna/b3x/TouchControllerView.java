@@ -51,6 +51,8 @@ public final class TouchControllerView extends View {
     static final int A = 0, B = 1, X = 2, Y = 3, BLACK = 4, WHITE = 5;
 
     private static final String PREFS = "b3x_touch";
+    /** Bump when the factory layouts change. */
+    private static final int LAYOUT_VERSION = 2;
     private static final boolean DEBUG = android.util.Log.isLoggable("b3x-pad", android.util.Log.DEBUG);
     private static final int MODES = 2;
     private static final String[] MODE_NAMES = {"FULL", "DRIVE"};
@@ -97,7 +99,11 @@ public final class TouchControllerView extends View {
         boolean shown() { return (visibleIn & (1 << mode)) != 0; }
         float w() { return baseW * unit * scale; }
         float h() { return baseH * unit * scale; }
-        float reach() { return kind == K_STICK ? w() * 1.35f : Math.max(w(), h()) * .6f + unit * .12f; }
+        float reach() {
+            if (kind == K_STICK) return w() * 1.35f;
+            if (kind == K_DPAD) return w() * 1.05f;              // the cross spans 2w
+            return Math.max(w(), h()) * .6f + unit * .12f;
+        }
 
         void use(int m) {
             cx = (own[m] ? px[m] : fx[m]) * width;
@@ -219,6 +225,10 @@ public final class TouchControllerView extends View {
         density = getResources().getDisplayMetrics().density;
         prefs = Settings.prefs(c);
         touchPrefs = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        // saved positions are offsets from one set of factory defaults; when
+        // the defaults change, start again from the new ones
+        if (touchPrefs.getInt("layout_version", 0) != LAYOUT_VERSION)
+            touchPrefs.edit().clear().putInt("layout_version", LAYOUT_VERSION).apply();
         mode = prefs.getInt(Settings.K_PAD_MODE, Settings.MODE_STEERING);
         steer = prefs.getInt(Settings.K_STEER, Settings.STEER_STICK);
         autoHide = prefs.getBoolean(Settings.K_PAD_AUTOHIDE, true);
@@ -287,64 +297,89 @@ public final class TouchControllerView extends View {
         // ---------------- FULL: the original Xbox controller ----------------
         Control lt = add(new Control("lt", "LT", null, K_RECT, 0, -1, 1, 0, 1.45f, .62f));
         Control rt = add(new Control("rt", "RT", null, K_RECT, 0, -1, 2, 0, 1.45f, .62f));
-        lt.at(F, .085f, .13f, 1f);
-        rt.at(F, .915f, .13f, 1f);
+
         Control back = add(new Control("back", "BACK", null, K_RECT, BACK, -1, 0, 0, .95f, .44f));
         Control start = add(new Control("start", "START", null, K_RECT, START, -1, 0, 0, .95f, .44f));
-        // Drive: in the side bars of the 4:3 picture, off the game's HUD
-        back.at(F, .40f, .17f, 1f).at(S, .07f, .32f, 1f);
-        start.at(F, .60f, .17f, 1f).at(S, .15f, .32f, 1f);
+
         Control ls = add(new Control("ls", "L", null, K_STICK, 0, -1, 0, 0, .9f, 0));
         Control rs = add(new Control("rs", "R", null, K_STICK, 0, -1, 0, 0, .9f, 0));
-        ls.at(F, .14f, .72f, 1f);
-        rs.at(F, .66f, .78f, .85f);
+
         Control dpad = add(new Control("dpad", "", null, K_DPAD, 0, -1, 0, 0, .95f, 0));
-        dpad.at(F, .33f, .80f, 1f).at(S, .085f, .50f, .62f);
-        float fx = .86f, fy = .60f, o = .072f;      // face diamond (x step scaled by aspect below)
-        float ox = o * height / width;
+
         Control a = add(new Control("a", "A", null, K_ROUND, 0, A, 0, 0, .40f, 0));
         Control b = add(new Control("b", "B", null, K_ROUND, 0, B, 0, 0, .40f, 0));
         Control x = add(new Control("x", "X", null, K_ROUND, 0, X, 0, 0, .40f, 0));
         Control y = add(new Control("y", "Y", null, K_ROUND, 0, Y, 0, 0, .40f, 0));
         a.color = Color.rgb(0x3F, 0xB9, 0x50); b.color = Color.rgb(0xE5, 0x53, 0x4B);
         x.color = Color.rgb(0x44, 0x93, 0xF8); y.color = Color.rgb(0xE3, 0xB3, 0x41);
-        a.at(F, fx, fy + o * 1.9f, 1f);
-        b.at(F, fx + ox * 1.9f, fy, 1f);
-        x.at(F, fx - ox * 1.9f, fy, 1f);
-        y.at(F, fx, fy - o * 1.9f, 1f);
+
         Control blk = add(new Control("black", "BLK", null, K_ROUND, 0, BLACK, 0, 0, .30f, 0));
         Control wht = add(new Control("white", "WHT", null, K_ROUND, 0, WHITE, 0, 0, .30f, 0));
         blk.color = Color.rgb(0x90, 0x90, 0x90);
-        blk.at(F, .755f, .40f, 1f);
-        wht.at(F, .80f, .30f, 1f);
+
         Control l3 = add(new Control("l3", "L3", null, K_ROUND, L3, -1, 0, 0, .28f, 0));
         Control r3 = add(new Control("r3", "R3", null, K_ROUND, R3, -1, 0, 0, .28f, 0));
-        l3.at(F, .05f, .45f, 1f);
-        r3.at(F, .56f, .60f, 1f);
+
+
+        // FULL, placed like a held Xbox controller in the side bars: left
+        // thumb = left stick (L3 beside it) over the D-pad, right thumb = the
+        // face diamond with Black/White above it over the right stick (R3
+        // beside it); triggers at the top corners, Back/Start inside them.
+        {
+            float u = unit, cxR = width - 2.0f * u;
+            place(lt, F, 1.25f * u, .6f * u, 1f);
+            place(rt, F, width - 1.25f * u, .6f * u, 1f);
+            place(back, F, 2.9f * u, .6f * u, 1f);
+            place(start, F, width - 2.9f * u, .6f * u, 1f);
+            place(ls, F, 2.0f * u, height * .5f - .55f * u, 1f);
+            place(l3, F, .55f * u, height * .5f - 1.75f * u, 1f);
+            place(dpad, F, 2.0f * u, height - 1.55f * u, 1.05f);
+            float fy = height * .5f - .55f * u, st = .8f * u;
+            place(a, F, cxR, fy + st, 1f);
+            place(b, F, cxR + st, fy, 1f);
+            place(x, F, cxR - st, fy, 1f);
+            place(y, F, cxR, fy - st, 1f);
+            place(wht, F, cxR + st, fy - 1.85f * st, 1f);
+            place(blk, F, cxR - st, fy - 1.85f * st, 1f);
+            place(rs, F, cxR, height - 1.6f * u, .95f);
+            place(r3, F, width - .55f * u, height - 2.6f * u, 1f);
+        }
 
         // ---------------- STEERING: driving ----------------
-        // left: steering
-        if (steer == Settings.STEER_STICK) ls.at(S, .15f, .73f, 1.35f);
+        // Placed in units (min(w/16, h/9)) from the screen edges, so the
+        // clusters stay tight on any aspect: left thumb = steering, D-pad and
+        // menu buttons; right thumb = pedals, boost and the face buttons
+        // as one diamond.
+        float u = unit;
+        // left
+        if (steer == Settings.STEER_STICK) place(ls, S, 2.05f * u, height - 2.0f * u, 1.3f);
         Control al = add(new Control("steer_l", "\u25C0", null, K_ARROW, 0, -1, 0, -1, 1.35f, 1.35f));
         Control ar = add(new Control("steer_r", "\u25B6", null, K_ARROW, 0, -1, 0, 1, 1.35f, 1.35f));
         if (steer == Settings.STEER_ARROWS) {
-            al.at(S, .08f, .78f, 1f);
-            ar.at(S, .215f, .78f, 1f);
+            place(al, S, 1.25f * u, height - 1.45f * u, 1f);
+            place(ar, S, 2.75f * u, height - 1.45f * u, 1f);
         }
-        // right: pedals and boost
+        place(dpad, S, 2.05f * u, height * .5f - .45f * u, 1.25f);
+        place(back, S, 1.3f * u, 1.45f * u, 1.35f);
+        place(start, S, 2.8f * u, 1.45f * u, 1.35f);
+        place(blk, S, 1.3f * u, .62f * u, 1.2f);
+        place(wht, S, 2.8f * u, .62f * u, 1.2f);
+        // right: pedals side by side, bottoms on one line
         Control gas = add(new Control("gas", "RT", "GAS", K_PEDAL, 0, -1, 2, 0, 1.25f, 2.5f));
         Control brk = add(new Control("brake", "LT", "BRAKE", K_PEDAL, 0, -1, 1, 0, 1.15f, 1.9f));
-        gas.at(S, .925f, .72f, 1f);
-        brk.at(S, .83f, .77f, 1f);
-        Control boost = add(new Control("boost", "A", "BOOST", K_ROUND, 0, A, 0, 0, .62f, 0));
+        float foot = height - .45f * u;
+        float gasX = width - 1.15f * u, brkX = gasX - 1.45f * u;
+        place(gas, S, gasX, foot - 2.5f * u * .5f, 1f);
+        place(brk, S, brkX, foot - 1.9f * u * .5f, 1f);
+        // face diamond right above the pedals, A (boost) at the bottom
+        Control boost = add(new Control("boost", "A", "BOOST", K_ROUND, 0, A, 0, 0, .46f, 0));
         boost.color = a.color;
-        // boost just above the pedals: hold gas, rock the thumb up to boost
-        boost.at(S, .87f, .43f, 1f);
-        b.at(S, .955f, .24f, .85f);
-        x.at(S, .80f, .26f, .8f);
-        y.at(S, .87f, .20f, .8f);
-        blk.at(S, .07f, .16f, 1f);
-        wht.at(S, .15f, .16f, 1f);
+        float dx = (gasX + brkX) * .5f, dy = foot - 2.5f * u - .5f * u - .46f * u;
+        float step = .82f * u;
+        place(boost, S, dx, dy, 1f);
+        place(x, S, dx - step, dy - step, 1.05f);
+        place(b, S, dx + step, dy - step, 1.05f);
+        place(y, S, dx, dy - 2 * step, 1.05f);
         lt.visibleIn &= ~(1 << S);
         rt.visibleIn &= ~(1 << S);
 
@@ -353,6 +388,11 @@ public final class TouchControllerView extends View {
         layoutUi();
         send();
         invalidate();
+    }
+
+    /** Factory position in pixels for a mode (stored as fractions). */
+    private void place(Control c, int mode, float px, float py, float s) {
+        c.at(mode, px / width, py / height, s);
     }
 
     private Control add(Control c) {
@@ -508,16 +548,32 @@ public final class TouchControllerView extends View {
                 break;
             }
             case K_DPAD: {
-                float s = c.w(), t = s * .36f;
+                // one connected cross: five equal squares, the outline only
+                float s = c.w(), q = s * 2f / 3f, h = q * .5f;   // q: side of a square
+                float cx = c.cx, cy = c.cy;
                 int bits = c.down ? currentDpad : 0;
-                arm(canvas, c.cx, c.cy - s * .62f, t, s * .62f, (bits & UP) != 0, op);
-                arm(canvas, c.cx, c.cy + s * .62f, t, s * .62f, (bits & DOWN) != 0, op);
-                arm(canvas, c.cx - s * .62f, c.cy, s * .62f, t, (bits & LEFT) != 0, op);
-                arm(canvas, c.cx + s * .62f, c.cy, s * .62f, t, (bits & RIGHT) != 0, op);
-                label(canvas, "\u25B2", c.cx, c.cy - s * .66f, t * .55f, op);
-                label(canvas, "\u25BC", c.cx, c.cy + s * .66f, t * .55f, op);
-                label(canvas, "\u25C0", c.cx - s * .66f, c.cy, t * .55f, op);
-                label(canvas, "\u25B6", c.cx + s * .66f, c.cy, t * .55f, op);
+                path.reset();
+                path.moveTo(cx - h, cy - h - q);
+                path.lineTo(cx + h, cy - h - q);
+                path.lineTo(cx + h, cy - h);
+                path.lineTo(cx + h + q, cy - h);
+                path.lineTo(cx + h + q, cy + h);
+                path.lineTo(cx + h, cy + h);
+                path.lineTo(cx + h, cy + h + q);
+                path.lineTo(cx - h, cy + h + q);
+                path.lineTo(cx - h, cy + h);
+                path.lineTo(cx - h - q, cy + h);
+                path.lineTo(cx - h - q, cy - h);
+                path.lineTo(cx - h, cy - h);
+                path.close();
+                fill.setColor(alpha(FILL, op));
+                canvas.drawPath(path, fill);
+                fill.setColor(alpha(PRESSED, op));
+                if ((bits & UP) != 0) canvas.drawRect(cx - h, cy - h - q, cx + h, cy - h, fill);
+                if ((bits & DOWN) != 0) canvas.drawRect(cx - h, cy + h, cx + h, cy + h + q, fill);
+                if ((bits & LEFT) != 0) canvas.drawRect(cx - h - q, cy - h, cx - h, cy + h, fill);
+                if ((bits & RIGHT) != 0) canvas.drawRect(cx + h, cy - h, cx + h + q, cy + h, fill);
+                canvas.drawPath(path, stroke);
                 break;
             }
         }
@@ -655,7 +711,7 @@ public final class TouchControllerView extends View {
             if (d > 1f) { dx /= d; dy /= d; }
             c.kx = dx; c.ky = dy;
         } else if (c.kind == K_DPAD) {
-            float dx = x - c.cx, dy = y - c.cy, dead = c.w() * .18f;
+            float dx = x - c.cx, dy = y - c.cy, dead = c.w() * .2f;
             int bits = 0;
             if (Math.abs(dx) > dead || Math.abs(dy) > dead) {
                 double ang = Math.toDegrees(Math.atan2(-dy, dx));        // 0 right, 90 up
