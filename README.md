@@ -181,21 +181,21 @@ Requirements: Android 11 (API 30) or newer, arm64-v8a, Vulkan 1.1, about
 
 ```mermaid
 flowchart LR
-    subgraph Build[On the PC, once per change]
-        XBE[default.xbe] -->|xboxrecomp lifter<br/>x86 → C| GEN[.work/gen/*.c]
-        GEN --> NDK[NDK clang -O2]
-        RT[xboxrecomp runtime<br/>kernel, memory, threads] --> NDK
-        NDK --> SO[libmain.so arm64]
-        JAVA[android/ Java<br/>launcher, touch pad, editor] --> APK[b3x.apk]
+    subgraph Build ["On the PC, once per change"]
+        XBE["default.xbe"] -->|"xboxrecomp lifter<br/>x86 &rarr; C"| GEN[".work/gen/*.c"]
+        GEN --> NDK["NDK clang -O2"]
+        RT["xboxrecomp runtime<br/>kernel, memory, threads"] --> NDK
+        NDK --> SO["libmain.so arm64"]
+        JAVA["android/ Java<br/>launcher, touch pad, editor"] --> APK["b3x.apk"]
         SO --> APK
     end
 
-    subgraph Phone[On the phone]
-        ISO[(your .iso or<br/>extracted folder)] --> LAUNCH[Launcher]
-        LAUNCH -->|game/ + settings files| GAME[Game process :game]
-        GAME --> GPU[NV2A push buffers<br/>to Vulkan via nv2a_vk]
-        GAME --> APU[MCPX APU<br/>to SDL audio]
-        PAD[Touch pad or controller] -->|XInput port 1| GAME
+    subgraph Phone ["On the phone"]
+        ISO[("your .iso or<br/>extracted folder")] --> LAUNCH["Launcher"]
+        LAUNCH -->|"game/ + settings files"| GAME["Game process (:game)"]
+        GAME --> GPU["NV2A push buffers<br/>to Vulkan via nv2a_vk"]
+        GAME --> APU["MCPX APU<br/>to SDL audio"]
+        PAD["Touch pad or controller"] -->|"XInput port 1"| GAME
     end
 
     APK --> LAUNCH
