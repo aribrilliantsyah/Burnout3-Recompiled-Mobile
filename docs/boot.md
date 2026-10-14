@@ -11,9 +11,9 @@ The build follows `../hl2`. `regen.sh` drives the toolkit's pipeline, and
 find. The old in-tree runtime fork under `src/{kernel,d3d,audio,input,apu,
 nv2a,platform}` is no longer built.
 
-![EA intro](screenshots/boot_ea_intro.png)
-![Criterion intro](screenshots/boot_criterion_intro.png)
-![Title screen](screenshots/boot_title_press_start.png)
+![EA intro](screenshots/boot_ea_intro.jpg)
+![Criterion intro](screenshots/boot_criterion_intro.jpg)
+![Title screen](screenshots/boot_title_press_start.jpg)
 
 ## Running it
 
@@ -80,10 +80,10 @@ With a controller the title walks its own frontend: the profile prompt, the
 name keyboard, "save your profile?", the main menu, Single Event, race
 options and vehicle select, then the takedown tutorial and the race load.
 
-![Profile prompt](screenshots/boot_profile_prompt.png)
-![Main menu](screenshots/menu_main.png)
-![Single Event](screenshots/menu_single_event.png)
-![Vehicle select](screenshots/menu_vehicle_select.png)
+![Profile prompt](screenshots/boot_profile_prompt.jpg)
+![Main menu](screenshots/menu_main.jpg)
+![Single Event](screenshots/menu_single_event.jpg)
+![Vehicle select](screenshots/menu_vehicle_select.jpg)
 
 ### Driving it with no one at the desk
 
